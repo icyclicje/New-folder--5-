@@ -1,0 +1,24 @@
+{
+  "name": "mivimoose-party",
+  "version": "1.0.0",
+  "description": "Mivimoose Party — a fast-paced campfire elimination word game. Pass the inflating moose by naming answers before it poofs!",
+  "main": "server/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "check": "node scripts/selftest.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0",
+    "express": "^4.22.3",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
+  }
+}
