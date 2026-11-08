@@ -8,7 +8,7 @@ import { sfx } from './sfx.js';
 import { app } from './main.js';
 
 const TIERS = ['kindling', 'trailhead', 'backcountry', 'deepwoods'];
-const TIER_LABEL = { kindling: '🪵 Kindling (10)', trailhead: '🥾 Trailhead (30)', backcountry: '🏕️ Backcountry (60)', deepwoods: '🌲 Deep Woods (85)', golden: '🦌 Golden Antler (100)' };
+const TIER_LABEL = { kindling: '🪵 Kindling (10)', trailhead: '🥾 Trailhead (30)', backcountry: '🏕️ Backcountry (60)', deepwoods: '🌲 Deep Woods (85)', golden: '🦌 Golden Antler — the nichest answer (100)' };
 
 const loadPacks = () => store.get('mivi-packs', []);
 const savePacks = (p) => store.set('mivi-packs', p);
@@ -56,7 +56,7 @@ export function openFieldGuide({ forRoom = false } = {}) {
     if (def.error) { toast(`🌧️ Skipped “${def.prompt}”: ${def.error}`, 'err'); renderCats(); return; }
     const pack = packs.find((p) => p.id === bank.packId);
     if (!pack) return;
-    pack.categories.push(def.ref ? { ref: def.ref, prompt: def.prompt, total: def.total, source: def.source } : { prompt: def.prompt, golden: def.golden, tiers: def.tiers, generated: true });
+    pack.categories.push(def.ref ? { ref: def.ref, prompt: def.prompt, total: def.total, source: def.source } : { prompt: def.prompt, golden: def.golden, tiers: def.tiers, generated: true, wd: def.wd, goldenScale: def.goldenScale });
     persist();
     sfx.accept('trailhead');
     renderCats();
@@ -312,7 +312,7 @@ export function openFieldGuide({ forRoom = false } = {}) {
       <div class="fg-row" style="margin-top:8px"><button class="btn btn-fire" id="gp-add">＋ Add to guide</button><button class="btn btn-wood" id="gp-edit">✏️ Tweak first</button></div>`;
     $('#gp-add', out).addEventListener('click', () => {
       sfx.click();
-      sel().categories.push({ prompt: def.prompt, golden: def.golden, tiers: def.tiers, generated: !!def.generated });
+      sel().categories.push({ prompt: def.prompt, golden: def.golden, tiers: def.tiers, generated: !!def.generated, wd: def.wd, goldenScale: def.goldenScale });
       genPreview = null; persist(); render();
       toast('🧭 Added to your field guide!', 'good');
     });

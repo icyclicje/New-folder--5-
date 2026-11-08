@@ -165,8 +165,49 @@ async function main() {
   ok(!botTry.ok, 'no bots allowed in ranked');
   Q1.s.close(); Q2.s.close();
 
+  // ---------------------------------------------------------- duel: one bank, tie when cleared
+  console.log('\n⚔️ Duel — one question bank, clear it for a tie');
+  const H = client('Hickory'), J = client('Juniper');
+  await H.hello(); await J.hello();
+  const rd = await H.emit('room:create', { settings: { mode: 'duel', fuseSec: 8 } });
+  await J.emit('room:join', { code: rd.code });
+  const tiny = { name: 'Tiny trail', categories: [{ prompt: 'Name a primary color', golden: { answer: 'Red' }, tiers: { kindling: ['Blue', 'Yellow'], trailhead: [], backcountry: [], deepwoods: [] } }] };
+  const sp = await H.emit('room:pack', { pack: tiny });
+  ok(sp.ok, 'duel uses a one-category field guide');
+  await sleep(200);
+  ok(H.state?.settings?.maxPlayers === 2 && H.state?.settings?.mode === 'duel', 'duel locks the campsite to 2 seats');
+  for (const c of [H, J]) {
+    const answers = ['Blue', 'Yellow', 'Red'];
+    const prev = c.onEv;
+    c.onEv = (ev) => { prev?.(ev); if (ev.type === 'turn' && ev.pid === c.id) setTimeout(() => c.s.emit('submit', { text: answers.find((a) => !c.events.some((e) => e.type === 'accept' && e.answer === a)) }), 150); };
+  }
+  await H.emit('room:start', {});
+  const tieOver = await H.waitEv('gameover', 30000).catch(() => null);
+  ok(tieOver && tieOver.tie === true && tieOver.results.every((r) => r.placement === 1), 'whole bank hiked → the duel ends in a TIE');
+  H.s.close(); J.s.close();
+
+  console.log('\n⚔️ Quick 1v1 matchmaking');
+  const D1 = client('Douglas'), D2 = client('Dogwood Jr');
+  await D1.hello(); await D2.hello();
+  const d1 = await D1.emit('room:quickduel', {});
+  const d2 = await D2.emit('room:quickduel', {});
+  ok(d1.ok && d2.ok && d1.code === d2.code, `both matched into the same duel (${d1.code})`);
+  await sleep(400);
+  ok(D1.state?.settings?.mode === 'duel' && D1.state?.autoStartMs > 0 && D1.state.autoStartMs <= 5000, `duel auto-starts in ${Math.round((D1.state?.autoStartMs || 0) / 1000)}s`);
+  D1.s.close(); D2.s.close();
+
   // ---------------------------------------------------------- generators
   console.log('\n🧭 Generators');
+  {
+    const W = client('Wikiwoods');
+    await W.hello();
+    const tw = Date.now();
+    const g1 = await W.emit('gen:category', { prompt: 'Name a dinosaur', reqId: 'w' });
+    const n1 = g1.ok ? Object.values(g1.def.tiers).flat().length + (g1.def.golden ? 1 : 0) : 0;
+    ok(g1.ok && n1 > 300 && g1.def.golden, g1.ok ? `“Name a dinosaur” → ${n1} answers via ${g1.how} in ${Date.now() - tw}ms (🦌 nichest: ${g1.def.golden?.answer})` : 'dinosaur generation: ' + g1.error);
+    if (g1.ok) ok(g1.def.tiers.trailhead.length + g1.def.tiers.backcountry.length > 500, `middle tiers: ${g1.def.tiers.trailhead.length} Trailhead + ${g1.def.tiers.backcountry.length} Backcountry`);
+    W.s.close();
+  }
   const G = client('Ginkgo');
   await G.hello();
   const tg = Date.now();

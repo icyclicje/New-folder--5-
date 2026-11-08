@@ -107,15 +107,15 @@ function createRoom(opts) {
   return room;
 }
 
-function findQuickRoom() {
+function findQuickRoom(duel = false) {
   let best = null;
   for (const r of rooms.values()) {
-    if (!r.quick || r.destroyed || r.phase !== 'lobby') continue;
+    if (!r.quick || r.destroyed || r.phase !== 'lobby' || !!r.duelQuick !== duel) continue;
     const n = r.activeCount();
     if (n >= r.settings.maxPlayers) continue;
     if (!best || n > best.activeCount()) best = r;
   }
-  return best || createRoom({ quick: true });
+  return best || createRoom(duel ? { quick: true, duel: true, name: 'Quick Duel' } : { quick: true });
 }
 
 // sweep empty rooms
@@ -205,8 +205,17 @@ io.on('connection', (socket) => {
     ack = ackSafe(ack);
     if (!profile) return ack({ ok: false, error: 'Say hello first.' });
     const cur = room();
-    if (cur?.quick && cur.phase === 'lobby') return ack({ ok: true, code: cur.code });
-    joinRoom(findQuickRoom(), ack);
+    if (cur?.quick && !cur.duelQuick && cur.phase === 'lobby') return ack({ ok: true, code: cur.code });
+    joinRoom(findQuickRoom(false), ack);
+  });
+
+  // ⚔️ Quick 1v1 Duel: matchmake into a 2-camper, one-question-bank duel
+  socket.on('room:quickduel', (_data, ack) => {
+    ack = ackSafe(ack);
+    if (!profile) return ack({ ok: false, error: 'Say hello first.' });
+    const cur = room();
+    if (cur?.duelQuick && cur.phase === 'lobby') return ack({ ok: true, code: cur.code });
+    joinRoom(findQuickRoom(true), ack);
   });
 
   socket.on('room:leave', (_d, ack) => { leaveCurrent(); ackSafe(ack)({ ok: true }); });

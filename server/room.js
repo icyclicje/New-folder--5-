@@ -44,22 +44,26 @@ function normalizeSettings(input, prev = DEFAULT_SETTINGS) {
   if (i.fuseSec != null) s.fuseSec = clamp(Number(i.fuseSec) || 12, 5, 40);
   if (i.extraLives != null) s.extraLives = !!i.extraLives;
   if (i.extraLifeGoal != null) s.extraLifeGoal = clamp(i.extraLifeGoal | 0, 150, 1500);
-  if (i.typoTolerance != null) s.typoTolerance = !!i.typoTolerance;
+  if (i.typoTolerance != null) s.typoTolerance = i.typoTolerance === true ? 'strong' : i.typoTolerance === false ? 'off' : ['off', 'gentle', 'strong'].includes(i.typoTolerance) ? i.typoTolerance : s.typoTolerance;
   if (i.aiJudge != null) s.aiJudge = !!i.aiJudge;
   if (i.isPublic != null) s.isPublic = !!i.isPublic;
+  if (i.duelTrail != null) s.duelTrail = cleanText(String(i.duelTrail), LIMITS.promptMax);
   if (s.mode === 'lonewolf') { s.lives = 1; s.extraLives = false; }
+  if (s.mode === 'duel') { s.maxPlayers = 2; s.gimmick = 'none'; s.extraLives = false; }
   return s;
 }
 
 class Room {
-  constructor(hub, { code, quick = false, settings, name }) {
+  constructor(hub, { code, quick = false, duel = false, settings, name }) {
     this.hub = hub;
     this.code = code;
     this.quick = quick;
     this.ranked = quick;
     this.name = cleanText(name, 32) || (quick ? 'Quick Trek' : 'Campsite ' + code);
-    this.settings = normalizeSettings(quick ? { mode: 'classic', source: 'krillion', maxPlayers: 8, isPublic: true } : settings, DEFAULT_SETTINGS);
-    if (quick) Object.assign(this.settings, { gimmick: 'none', lives: 2, fuseSec: 12, extraLives: true, extraLifeGoal: 400 });
+    this.duelQuick = quick && duel;
+    this.settings = normalizeSettings(quick ? { mode: duel ? 'duel' : 'classic', source: 'krillion', maxPlayers: duel ? 2 : 8, isPublic: true } : settings, DEFAULT_SETTINGS);
+    if (quick && !duel) Object.assign(this.settings, { gimmick: 'none', lives: 2, fuseSec: 12, extraLives: true, extraLifeGoal: 400 });
+    if (quick && duel) Object.assign(this.settings, { gimmick: 'none', lives: 1, fuseSec: 10, extraLives: false, duelTrail: '' });
     this.customPack = null; // { name, defs }
     this.players = new Map();
     this.hostId = null;
@@ -222,6 +226,10 @@ class Room {
   updateSettings(pid, input) {
     if (pid !== this.hostId || this.quick || this.phase !== 'lobby') return;
     const prevMax = this.settings.maxPlayers;
+    if (input?.mode === 'duel' && this.activeCount() > 2) {
+      this.sys('⚔️ Duels are 1v1 — send extra campers (or critters) home first.');
+      return;
+    }
     this.settings = normalizeSettings(input, this.settings);
     if (this.settings.maxPlayers < this.activeCount()) this.settings.maxPlayers = Math.max(prevMax > this.activeCount() ? this.activeCount() : prevMax, this.activeCount());
     this.emitState();
@@ -261,6 +269,7 @@ class Room {
     const text = cleanText(String(raw ?? ''), LIMITS.answerMax);
     if ((g.stage === 'turn' || g.stage === 'judging') && g.turn?.pid === pid) {
       this.io.to(this.code).emit('typing', { pid, text });
+      this.prejudge(text);
     } else if (g.stage === 'picking' && g.special?.leaderId === pid) {
       this.io.to(this.code).emit('typing', { pid, text, carving: true });
       this.speculateLeader(text);
@@ -333,6 +342,22 @@ class Room {
     this.emitEv('gamestart', { introMs: INTRO_MS });
     this.emitState();
     const first = pick(participants).id;
+    const g = this.game;
+    if (mode.duel && s.duelTrail) {
+      // a duel on one custom trail: start scouting during the intro so it's ready when the fire's lit
+      g.nextHolder = first;
+      const t0 = Date.now();
+      const job = this.hub.questions.quickCategory(s.duelTrail, { onProgress: (c) => this.categoryProgress(c) });
+      job.ready.then((cat) => {
+        if (this.game !== g) return;
+        this.setT(() => { if (this.game === g) { this.setCategory(cat, 'duel', { how: job.how, ms: Date.now() - t0 }); this.startTurn(first); } }, Math.max(0, g.introEndsAt - Date.now()));
+      }, (err) => {
+        if (this.game !== g) return;
+        this.sys(`🌧️ Couldn't scout “${s.duelTrail}” (${err.message}) — dueling on a random trail instead.`);
+        this.setT(() => { if (this.game === g) { this.nextCategory('start'); this.startTurn(first); } }, Math.max(0, g.introEndsAt - Date.now()));
+      });
+      return { ok: true };
+    }
     this.setT(() => {
       if (!this.game) return;
       this.nextCategory('start');
@@ -341,11 +366,52 @@ class Room {
     return { ok: true };
   }
 
+  isDuel() { return !!MODES[this.settings.mode]?.duel; }
+
+  /** Live answer counts while a generated category keeps searching during play. */
+  categoryProgress(cat) {
+    const g = this.game;
+    if (!g || g.category !== cat) return;
+    const now = Date.now();
+    if (now - (this._lastCatProgress || 0) < 700) return;
+    this._lastCatProgress = now;
+    this.emitState();
+    if (cat.complete && this.isDuel()) this.checkDuelTie();
+  }
+
+  /** Start a ranger check while the holder is still typing, so Enter is instant. */
+  prejudge(text) {
+    const g = this.game;
+    if (!g?.category || !this.settings.aiJudge || !this.hub.questions.canJudge(g.category)) return;
+    clearTimeout(this._prejudgeT);
+    if (text.length < 3) return;
+    const turn = g.turn;
+    this._prejudgeT = setTimeout(() => {
+      if (this.game !== g || g.turn !== turn || g.stage !== 'turn') return;
+      if (g.category.match(text, { typo: this.settings.typoTolerance, used: g.usedEntries })) return; // already on the list
+      const limit = this.hub.ai.enabled ? 3 : 8; // Wikidata checks are free; Claude checks cost a little
+      turn.prejudged = (turn.prejudged || 0) + 1;
+      if (turn.prejudged > limit) return;
+      this.hub.questions.judge(g.category, text);
+    }, 420);
+  }
+
   minTierRank() { return TIER_BY_KEY[MODES[this.settings.mode].minTier || 'kindling'].rank; }
 
   // ---------------- game: categories ----------------
   setCategory(cat, reason, extra = {}) {
     const g = this.game;
+    if (g.category && g.category !== cat) g.category.active = false; // stop background searching on the old trail
+    cat.active = true;
+    cat.isClaimed = (e) => g.usedEntries.has(e.id);
+    cat.onGoldenMove = () => {
+      if (this.game !== g || g.category !== cat) return;
+      const now = Date.now();
+      if (now - (g.lastGoldenNews || 0) < 12000 || !['turn', 'judging'].includes(g.stage)) return;
+      g.lastGoldenNews = now;
+      this.emitEv('goldenmoved', {});
+      this.sys('🦌 The ranger found something even nichier — the Golden Antler wandered deeper into the woods…', 'game');
+    };
     g.category = cat;
     g.catAnswers = 0;
     g.usedEntries = new Set();
@@ -358,7 +424,7 @@ class Room {
 
   nextCategory(reason) {
     const g = this.game;
-    const cat = this.hub.questions.pickForGame(this.settings.source, g.usedCats, g.customDefs);
+    const cat = this.hub.questions.pickForGame(this.settings.source, g.usedCats, g.customDefs, { duel: this.isDuel() });
     if (!cat) { this.sys('The ranger lost the map — no categories available!'); return; }
     this.setCategory(cat, reason);
   }
@@ -428,7 +494,7 @@ class Room {
     const now = Date.now();
     if (now - (p.lastSubmit || 0) < 120) return;
     p.lastSubmit = now;
-    const m = g.category.match(text, { typo: this.settings.typoTolerance });
+    const m = g.category.match(text, { typo: this.settings.typoTolerance, used: g.usedEntries });
     if (m) return this.resolveMatch(p, text, m.entry, { fuzzy: m.fuzzy });
     if (this.canJudge()) return this.judge(p, text);
     this.reject(p, text, 'unknown');
@@ -436,7 +502,7 @@ class Room {
 
   canJudge() {
     const g = this.game;
-    return this.hub.ai.enabled && this.settings.aiJudge && g.category.generated && g.turn.judgeCount < 2;
+    return this.settings.aiJudge && this.hub.questions.canJudge(g.category) && g.turn.judgeCount < 3;
   }
 
   async judge(p, text) {
@@ -451,7 +517,8 @@ class Room {
     this.emitEv('judging', { pid: p.id, text });
     this.emitState();
     let verdict;
-    try { verdict = await this.hub.ai.judge(g.category.prompt, text); }
+    // usually already settled by the typing pre-check → effectively instant
+    try { verdict = await this.hub.questions.judge(g.category, text); }
     catch (err) { verdict = { valid: false, error: true }; }
     if (this.game !== g || g.turn !== turn || g.stage !== 'judging') return;
     const pausedFor = Date.now() - turn.pausedAt;
@@ -464,9 +531,20 @@ class Room {
     this.emitEv('resume', { pid: p.id, turnId: turn.id, remainingMs: remain, totalMs: turn.totalMs });
     if (verdict && verdict.valid) {
       const canon = cleanText(verdict.canonical || '', 80) || text;
-      let entry = g.category.match(canon, { typo: false })?.entry;
+      const cat = g.category;
+      let entry = cat.match(canon, { typo: false })?.entry;
       const tier = TIER_BY_KEY[verdict.tier] && verdict.tier !== 'golden' ? verdict.tier : 'deepwoods';
-      if (!entry) entry = g.category.add(`${canon}|${text}`, tier);
+      if (!entry) entry = cat.add(`${canon}|${text}`, tier);
+      // a player answer nicher than the current Golden Antler takes the antler (if nobody's found it yet)
+      if (entry && !g.usedEntries.has(entry.id)) {
+        const score = cat.goldenScale === 'sl' ? verdict.sl : cat.goldenScale === 'pct' ? verdict.known_pct : undefined;
+        if (Number.isFinite(score) && score < cat.goldenScore) {
+          const prev = cat.onGoldenMove;
+          cat.onGoldenMove = null; // no "it wandered off" news — they're standing on it
+          if (cat.offerGolden(entry, score, `Found by ${p.name} — nichier than anything on the ranger's map!`)) this.sys(`🦌✨ ${p.name}'s answer is so niche it became the new Golden Antler!`, 'game');
+          cat.onGoldenMove = prev;
+        }
+      }
       if (entry) return this.resolveMatch(p, text, entry, { judged: true });
     }
     this.reject(p, text, verdict?.error ? 'judge-error' : 'unknown');
@@ -519,12 +597,30 @@ class Room {
     if (lifeGained) this.sys(`🍡 ${p.name} roasted a perfect marshmallow and earned an extra life!`, 'game');
     if (entry.tier === 'golden') this.sys(`🦌✨ ${p.name} found the GOLDEN ANTLER answer: ${entry.name}!`, 'game');
 
-    const rotate = MODES[this.settings.mode].rotateEvery;
-    if ((rotate && g.catAnswers >= rotate) || this.eligibleRemaining() < 2) {
-      if (!rotate) this.sys('🗺️ That trail is all hiked out — new category!');
-      this.nextCategory('rotate');
+    if (this.isDuel()) {
+      // one question bank for the whole duel — hike it all and it's a tie
+      if (this.checkDuelTie()) return;
+    } else {
+      const rotate = MODES[this.settings.mode].rotateEvery;
+      if ((rotate && g.catAnswers >= rotate) || this.eligibleRemaining() < 2) {
+        if (!rotate) this.sys('🗺️ That trail is all hiked out — new category!');
+        this.nextCategory('rotate');
+      }
     }
     this.startTurn(this.nextAlive(p.id));
+  }
+
+  /** Duel: the bank is empty (and the ranger has stopped scouting) → tie. */
+  checkDuelTie() {
+    const g = this.game;
+    if (!g || g.stage === 'over' || !g.category) return false;
+    if (this.eligibleRemaining() > 0 || g.category.complete === false) return false;
+    this.clearT(g.turnTimer);
+    g.stage = 'intermission';
+    this.sys(`🤝 Every answer on “${g.category.prompt}” has been hiked — the duel is a TIE!`, 'game');
+    this.emitState();
+    this.setT(() => this.endGame(null, { tie: true }), 1800);
+    return true;
   }
 
   onFuse(turnId) {
@@ -558,12 +654,14 @@ class Room {
     g.round++;
     g.nextHolder = this.nextAlive(p.id);
     g.intermissionEndsAt = Date.now() + POP_PAUSE_MS;
-    const special = this.settings.gimmick !== 'none' && (g.round - 1) % this.settings.specialEvery === 0;
+    const duel = this.isDuel();
+    const special = !duel && this.settings.gimmick !== 'none' && (g.round - 1) % this.settings.specialEvery === 0;
     if (special && this.settings.gimmick === 'echotrail') this.prepareEcho(); // start right away, during the pause
     this.emitState();
     this.setT(() => {
       if (this.game !== g) return;
       if (special) this.beginSpecial();
+      else if (duel) this.startTurn(g.nextHolder); // a duel stays on its one trail
       else { this.nextCategory('pop'); this.startTurn(g.nextHolder); }
     }, POP_PAUSE_MS);
   }
@@ -670,10 +768,11 @@ class Room {
     const job = this.hub.questions.quickCategory(text, {
       onProgress: (cat) => {
         if (this.game !== g) return;
+        if (g.category === cat) return this.categoryProgress(cat); // still scouting during play
         const now = Date.now();
         if (now - lastEmit < 200) return;
         lastEmit = now;
-        this.io.to(this.code).emit('genprogress', { count: cat.size, prompt: cat.prompt, counts: cat.counts() });
+        this.io.to(this.code).emit('genprogress', { count: cat.size, prompt: cat.prompt, counts: cat.counts(), sources: [...(cat.sources || [cat.source])], ms: now - g.special?.startedAt });
       },
     });
     withTimeout(job.ready, GEN_TIMEOUT_MS, 'The ranger took too long scouting.').then((cat) => {
@@ -755,14 +854,16 @@ class Room {
   }
 
   // ---------------- game: end ----------------
-  endGame(winnerId) {
+  endGame(winnerId, { tie = false } = {}) {
     const g = this.game;
     if (!g || g.stage === 'over') return;
     this.clearT(g.turnTimer);
     g.stage = 'over';
+    if (g.category) g.category.active = false;
     const winner = winnerId ? this.players.get(winnerId) : null;
     if (winner) { winner.placement = 1; }
     const parts = g.order.map((id) => this.players.get(id)).filter(Boolean);
+    if (tie) for (const p of parts) if (p.alive) p.placement = 1; // everyone still standing shares the win
     for (const p of parts) if (p.placement == null) p.placement = parts.length;
     const humans = parts.filter((p) => !p.isBot);
     const store = this.hub.profiles;
@@ -782,10 +883,10 @@ class Room {
         pr.answers += p.answers;
         pr.goldens += p.goldens;
         pr.bestScore = Math.max(pr.bestScore, p.score);
-        if (p.placement === 1 && countsForWins) pr.wins++;
+        if (p.placement === 1 && countsForWins && !tie) pr.wins++;
         if (ranked) {
           pr.rankedGames++;
-          if (p.placement === 1) pr.rankedWins++;
+          if (p.placement === 1 && !tie) pr.rankedWins++;
           const d = deltas.get(p.id) || 0;
           pr.rating = Math.max(100, pr.rating + d);
           pr.peakRating = Math.max(pr.peakRating || 0, pr.rating);
@@ -806,7 +907,7 @@ class Room {
     store.save();
     this.phase = 'ended';
     if (winner) this.sys(`🏆 ${winner.name} is the last camper standing! ${countsForWins ? '' : '(Wins only count with 2+ human campers.)'}`, 'game');
-    this.emitEv('gameover', { winnerId, results, ranked, resultsMs: RESULTS_MS });
+    this.emitEv('gameover', { winnerId, results, ranked, tie, resultsMs: RESULTS_MS });
     this.emitState();
     // refresh profiles for everyone who played
     for (const h of humans) {
@@ -871,6 +972,8 @@ class Room {
         introMs: g.stage === 'intro' ? Math.max(0, g.introEndsAt - now) : 0,
         intermissionMs: g.stage === 'intermission' ? Math.max(0, (g.intermissionEndsAt || now) - now) : 0,
         specialIn: this.specialIn(),
+        duel: this.isDuel(),
+        remaining: g.category ? this.eligibleRemaining() : null,
         special: g.special ? {
           type: g.special.type, leaderId: g.special.leaderId, suggestions: g.special.suggestions,
           remainingMs: g.special.deadline ? Math.max(0, g.special.deadline - now) : null,

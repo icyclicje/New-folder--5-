@@ -8,7 +8,7 @@ const TIERS = [
   { key: 'trailhead',   name: 'Trailhead',     pts: 30,  color: '#8fcf6a', icon: '🥾', blurb: 'A well-worn path — plenty of hikers get here.' },
   { key: 'backcountry', name: 'Backcountry',   pts: 60,  color: '#46b3b0', icon: '🏕️', blurb: 'Off the beaten path. Only some campers find it.' },
   { key: 'deepwoods',   name: 'Deep Woods',    pts: 85,  color: '#9b7bea', icon: '🌲', blurb: 'Genuinely obscure. Most campers never wander this far.' },
-  { key: 'golden',      name: 'Golden Antler', pts: 100, color: '#ffcc3d', icon: '🦌', blurb: 'The one legendary answer on this trail.' },
+  { key: 'golden',      name: 'Golden Antler', pts: 100, color: '#ffcc3d', icon: '🦌', blurb: 'The single nichest answer on the trail — and it can wander deeper as the ranger keeps scouting.' },
 ];
 const TIER_BY_KEY = Object.fromEntries(TIERS.map((t, i) => [t.key, { ...t, rank: i }]));
 
@@ -54,6 +54,12 @@ const MODES = {
     desc: 'A brand-new category on every single turn. Stay sharp!',
     fuse: 'turn', fuseSec: 13, lives: 2, extraLives: true, rotateEvery: 1, minTier: 'kindling',
   },
+  duel: {
+    name: 'Duel (1v1)',
+    icon: '⚔️',
+    desc: 'Two campers, ONE question bank for the whole match. Trade answers until someone poofs — hike the entire bank and it is a tie.',
+    fuse: 'turn', fuseSec: 10, lives: 1, extraLives: false, rotateEvery: 0, minTier: 'kindling', duel: true,
+  },
   lonewolf: {
     name: 'Lone Wolf',
     icon: '🐺',
@@ -94,9 +100,10 @@ const DEFAULT_SETTINGS = {
   fuseSec: 12,
   extraLives: true,
   extraLifeGoal: 400,
-  typoTolerance: true,
+  typoTolerance: 'strong', // autocorrect: off | gentle | strong
   aiJudge: true,
   isPublic: false,
+  duelTrail: '',
   customPack: null,
 };
 

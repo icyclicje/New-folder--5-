@@ -232,7 +232,7 @@ export class GameView {
       const sign = $('#trail-sign');
       sign.classList.remove('swing'); void sign.offsetWidth; sign.classList.add('swing');
     }
-    $('#cat-src').textContent = `${c.sourceLabel || c.source}${c.total ? ` · ${c.total.toLocaleString()} answers across 5 tiers` : ''}${c.complete === false ? ' · ranger still scouting…' : ''}`;
+    $('#cat-src').innerHTML = `${esc(c.sourceLabel || c.source)}${c.total ? ` · <b class="count-tick">${c.total.toLocaleString()}</b> answers across 5 tiers` : ''}${c.complete === false ? ' · <span class="scouting"><span class="spin">🧭</span> ranger still scouting deeper…</span>' : ''}`;
     const minIdx = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'].indexOf(mode.minTier || 'kindling');
     $('#tier-chips').innerHTML = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'].map((t, i) =>
       `<span class="tier-chip ${i < minIdx ? 'banned' : ''}" style="--tc:${tierVar(t)}" title="${TIER_NAME[t]}">${TIER_ICON[t]} ${TIER_NAME[t]} ${c.counts?.[t] ?? 0}</span>`).join('');
@@ -250,7 +250,8 @@ export class GameView {
       html += `<span class="pill">${gm.icon} ${esc(gm.name)} ${label}${g.echoFrom && s.settings.gimmick === 'echotrail' ? ` · echo: “${esc(g.echoFrom)}”` : ''}</span>`;
     }
     if (g.ranked) html += '<span class="pill">🏅 <b>Ranked</b></span>';
-    html += `<span class="pill">🗺️ <b>${g.used}</b> answers hiked</span>`;
+    if (g.duel) html += `<span class="pill duel-pill">⚔️ One-bank duel · <b>${g.remaining ?? '?'}</b> answers left${g.category?.complete === false ? ' (+ still scouting)' : ''} — clear it and it's a tie</span>`;
+    else html += `<span class="pill">🗺️ <b>${g.used}</b> answers hiked</span>`;
     html += '<button class="pill hud-radio" data-radio>📻 Radio & Trail Log</button>';
     $('#hud').innerHTML = html;
   }
@@ -343,8 +344,8 @@ export class GameView {
       const ov = this.showOverlay('gen-' + (g.special.generating || ''), `<div class="compass">🧭</div>
         <div class="big">${g.special.type === 'echotrail' ? `📣 “${esc(g.special.from || '')}” echoes…` : '🌲 Scouting the trail…'}</div>
         <p class="muted" id="gen-prompt">${esc(g.special.generating || '')}</p>
-        <div class="gen-count" id="gen-count">0</div><div class="muted">answers found</div>
-        <div class="gen-tiers" id="gen-tiers"></div>`);
+        <div class="gen-count" id="gen-count">0</div><div class="muted">answers found — the round starts the moment there are enough</div>
+        <div class="gen-tiers" id="gen-tiers"></div><div class="muted gen-meta" id="gen-meta"></div>`);
       if (this.genInfo) this.onGenProgress(this.genInfo);
       return ov;
     }
@@ -355,11 +356,16 @@ export class GameView {
     this.genInfo = d;
     const c = $('#gen-count');
     if (!c) return;
-    c.textContent = d.count ?? 0;
+    c.textContent = (d.count ?? 0).toLocaleString();
     if (d.prompt) $('#gen-prompt').textContent = d.prompt;
     const counts = d.counts || {};
-    const total = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
-    $('#gen-tiers').innerHTML = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'].map((t) => `<i style="flex-grow:${(counts[t] || 0) / total};background:${tierVar(t)}"></i>`).join('');
+    const max = Math.max(1, ...Object.values(counts));
+    // live tier columns: watch the middle tiers fill up
+    $('#gen-tiers').innerHTML = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'].map((t) =>
+      `<div class="gen-col" style="--tc:${tierVar(t)}"><i style="height:${Math.max(4, ((counts[t] || 0) / max) * 100)}%"></i><b>${(counts[t] || 0).toLocaleString()}</b><span>${TIER_ICON[t]}</span></div>`).join('');
+    const src = (d.sources || []).map((s) => (s === 'ai' ? '🧭 AI ranger' : s === 'wikidata' ? '🌐 Wikidata' : s)).join(' + ');
+    const meta = $('#gen-meta');
+    if (meta) meta.textContent = `${src ? src + ' · ' : ''}${d.ms ? (d.ms / 1000).toFixed(1) + 's' : ''}`;
   }
 
   // ------------------------------------------------------------ typing
@@ -570,9 +576,15 @@ export class GameView {
           inp.value = '';
           inp.classList.add('good');
           setTimeout(() => inp.classList.remove('good'), 400);
+          if (ev.fuzzy) toast(`✨ Autocorrected “${ev.typed}” → ${ev.answer}`, 'good');
+          else if (ev.judged) toast(`🧭 The ranger verified “${ev.answer}” — it wasn't even on the map!`, 'good');
         }
         break;
       }
+      case 'goldenmoved':
+        toast('🦌 The ranger found something nichier — the Golden Antler wandered deeper into the woods…');
+        sfx.echo();
+        break;
       case 'reject': {
         sfx.reject(ev.reason);
         if (ev.pid === this.me) {

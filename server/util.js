@@ -64,11 +64,92 @@ function singular(w) {
   return w;
 }
 
-// Canonical matching key: normalized, each word singularized, spaces removed.
-function answerKey(s) {
+// Common abbreviations people type (applied to both answers and guesses).
+const ABBR = { st: 'saint', ste: 'sainte', mt: 'mount', mtn: 'mountain', ft: 'fort', dr: 'doctor', mr: 'mister', mrs: 'missus', jr: 'junior', sr: 'senior', vs: 'versus', v: 'versus', n: 'and', pt: 'point', ave: 'avenue', bros: 'brother', bro: 'brother', no: 'number', intl: 'international', natl: 'national', univ: 'university', hwy: 'highway', lk: 'lake', is: 'island' };
+
+function wordList(s) {
   const n = normalize(s);
-  if (!n) return '';
-  return n.split(' ').map((w) => WORD_NUM[w] || singular(w)).join('');
+  if (!n) return [];
+  const words = n.split(' ');
+  return words.map((w, i) => {
+    if (ABBR[w] && !(w === 'is' && words.length < 3) && !(w === 'no' && i === 0) && !(w === 'v' && words.length < 3)) w = ABBR[w];
+    return WORD_NUM[w] || singular(w);
+  });
+}
+
+// Canonical matching key: normalized, abbreviations expanded, each word singularized, spaces removed.
+function answerKey(s) {
+  return wordList(s).join('');
+}
+
+// "fusilli" ≈ "fusili": collapse doubled letters
+const squashKey = (k) => k.replace(/(.)\1+/g, '$1');
+
+// Sound-alike key (Metaphone-flavoured): "Tchaikovsky" ≈ "Chaikovsky", "Filadelfia" ≈ "Philadelphia"
+function phoneticKey(k) {
+  let s = k.replace(/[^a-z]/g, '');
+  if (s.length < 4) return '';
+  s = s.replace(/^(kn|gn|pn|wr|ps)/, (m) => m[1])
+    .replace(/ph/g, 'f').replace(/ght/g, 't').replace(/gh/g, 'g').replace(/th/g, '0')
+    .replace(/tch/g, '1').replace(/sch/g, 'sk').replace(/ch/g, '1').replace(/sh/g, '1')
+    .replace(/dg(?=[eiy])/g, 'j').replace(/ck/g, 'k').replace(/c(?=[eiy])/g, 's').replace(/c/g, 'k')
+    .replace(/q/g, 'k').replace(/x/g, 'ks').replace(/z/g, 's').replace(/wh/g, 'w').replace(/v/g, 'f');
+  s = s[0] + s.slice(1).replace(/[aeiouyhw]/g, '');
+  return s.replace(/(.)\1+/g, '$1');
+}
+
+// Keyboard-aware typo distance: neighbouring keys, vowel swaps, doubled letters
+// and transpositions all count as "half mistakes".
+const KB_ROWS = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+const KB_POS = {};
+KB_ROWS.forEach((r, y) => [...r].forEach((c, x) => { KB_POS[c] = [x + y * 0.4, y]; }));
+const VOWELS = new Set('aeiouy');
+function subCost(a, b) {
+  if (a === b) return 0;
+  const p = KB_POS[a], q = KB_POS[b];
+  if (p && q && Math.abs(p[0] - q[0]) <= 1.2 && Math.abs(p[1] - q[1]) <= 1) return 0.55;
+  if (VOWELS.has(a) && VOWELS.has(b)) return 0.65;
+  return 1;
+}
+function typoDistance(a, b, max = 3) {
+  const la = a.length, lb = b.length;
+  if (Math.abs(la - lb) > max * 2) return max + 1;
+  let prev2 = null;
+  let prev = new Float32Array(lb + 1), cur = new Float32Array(lb + 1);
+  for (let j = 0; j <= lb; j++) prev[j] = j;
+  let lastRowMin = 0;
+  for (let i = 1; i <= la; i++) {
+    cur[0] = i;
+    let rowMin = i;
+    const ca = a[i - 1];
+    for (let j = 1; j <= lb; j++) {
+      const cb = b[j - 1];
+      const del = prev[j] + (i > 1 && a[i - 2] === ca ? 0.4 : 1);
+      const ins = cur[j - 1] + (j > 1 && b[j - 2] === cb ? 0.4 : 1);
+      let v = Math.min(del, ins, prev[j - 1] + subCost(ca, cb));
+      if (prev2 && i > 1 && j > 1 && ca === b[j - 2] && a[i - 2] === cb) v = Math.min(v, prev2[j - 2] + 0.6);
+      cur[j] = v;
+      if (v < rowMin) rowMin = v;
+    }
+    // a swap in the next row can still undo this row's cost, so look two rows back before giving up
+    if (rowMin > max && lastRowMin + 0.6 > max) return max + 1;
+    lastRowMin = rowMin;
+    prev2 = prev.slice();
+    [prev, cur] = [cur, prev];
+  }
+  return prev[lb];
+}
+
+/** How many "mistakes" autocorrect forgives for a guess of this length. */
+function typoBudget(len, strength = 'strong') {
+  if (strength === 'off') return 0;
+  if (strength === 'gentle') return len < 5 ? 0 : len < 9 ? 1 : 2;
+  if (len <= 2) return 0;
+  if (len === 3) return 0.65;
+  if (len <= 5) return 1.05;
+  if (len <= 8) return 1.6;
+  if (len <= 12) return 2.3;
+  return Math.min(3.5, len * 0.2);
 }
 
 // Damerau-Levenshtein (optimal string alignment) with early exit.
@@ -120,5 +201,5 @@ function polishPrompt(p) {
 
 module.exports = {
   randId, roomCode, shuffle, pick, clamp, cleanText, decodeEntities, stripTags,
-  normalize, answerKey, editDistance, promptTokens, promptSimilarity, polishPrompt,
+  normalize, answerKey, wordList, squashKey, phoneticKey, typoDistance, typoBudget, editDistance, promptTokens, promptSimilarity, polishPrompt,
 };

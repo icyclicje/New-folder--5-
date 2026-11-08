@@ -1,21 +1,27 @@
 'use strict';
 /**
- * On-the-fly category generation with Claude.
+ * On-the-fly category generation with Claude (+ Wikidata in parallel).
  *
- * Speed strategy ("insanely quick"):
- *  - Four parallel *streaming* requests, one per rarity slice, at low effort.
- *  - Answers are parsed line-by-line as they stream and merged live into a
- *    Category, so a round can start the moment the common answers arrive
- *    (usually ~2–4s) while the deep cuts keep pouring in during play.
- *  - Results are cached on disk, so a repeated category is instant.
- *  - Unlisted answers can be checked by a tiny "ranger judge" call.
+ * Speed & depth strategy:
+ *  - A small "core" stream returns the polished prompt, a SIZE estimate, a
+ *    Wikidata LOOKUP hint and the obvious answers within a couple of seconds.
+ *    The round is playable as soon as ~12 answers exist.
+ *  - The moment SIZE arrives, letter-range "fan-out" streams launch in parallel —
+ *    more of them for bigger categories — each tagging every answer with a tier.
+ *    Broad categories end up with thousands of Trailhead/Backcountry answers;
+ *    tiny ones aren't padded with nonsense.
+ *  - Wikidata runs at the same time and merges real, fame-ranked members.
+ *  - While the category is still in play, extra "waves" keep searching deeper.
+ *  - Every stream reports its NICHEST answer with an estimated % of people who'd
+ *    know it; the Golden Antler always sits on the nichest one found so far.
  *
- * Requires ANTHROPIC_API_KEY. Without it, fallback.js handles generation.
+ * Requires ANTHROPIC_API_KEY. Without it, questions.js uses Wikidata + fallbacks.
  */
 const fs = require('fs');
 const path = require('path');
 const { Category } = require('./answers');
 const { cleanText, polishPrompt, answerKey } = require('./util');
+const wikidata = require('./wikidata');
 
 let Anthropic = null;
 try { Anthropic = require('@anthropic-ai/sdk'); Anthropic = Anthropic.default || Anthropic; } catch { /* optional */ }
@@ -23,60 +29,71 @@ try { Anthropic = require('@anthropic-ai/sdk'); Anthropic = Anthropic.default ||
 const MODEL = process.env.MIVI_AI_MODEL || 'claude-opus-5-5';
 const FAST = process.env.MIVI_AI_FAST === '1'; // Opus fast mode (premium pricing)
 const USE_FALLBACKS = process.env.MIVI_AI_FALLBACKS !== '0';
+const CONCURRENCY = Math.max(2, parseInt(process.env.MIVI_AI_CONCURRENCY || '16', 10));
+const WAVES = Math.max(0, parseInt(process.env.MIVI_AI_WAVES || '1', 10)); // extra deep-search waves while in play
+const READY_AT = 12;
 
 const SYSTEM = `You build answer boards for Mivimoose Party, a fast multiplayer party game in the style of Krillion: players take turns naming ONE valid answer to a category prompt, and nicher answers score more.
 
-Rarity tiers (how many people would think of the answer):
-- KINDLING: the handful of answers almost everyone says first.
-- TRAILHEAD: common answers many people would think of.
-- BACKCOUNTRY: valid answers only a minority would think of.
-- DEEP WOODS: obscure, expert-level answers most people never think of.
-- GOLDEN ANTLER: exactly one designated answer — the most satisfying, delightful "aha!" answer that is still undeniably correct.
+Rarity tiers (how readily people think of an answer):
+- K (Kindling): the handful almost everyone says first.
+- T (Trailhead): a typical person could come up with it within a minute.
+- B (Backcountry): known to fans, enthusiasts or well-read people.
+- D (Deep Woods): genuinely obscure, but verifiable in a specialist reference.
+For broad categories most valid answers are T or B — reserve D for the truly obscure.
 
-Output rules:
-- Plain text only. One answer per line. No numbering, bullets, headings, or commentary.
-- Line format: Canonical Name | alias | alias   (aliases optional: alternate names/spellings people might type; never plurals or case variants).
-- Every answer must be genuinely and verifiably correct for the prompt. Never invent items. Accuracy beats volume.
-- No duplicates. Family-friendly only.`;
+Rules:
+- Plain text only, one item per line, exactly in the requested format. No numbering, headings or commentary.
+- Every answer must be real and unambiguously satisfy the prompt. Never invent, stretch the category, or include near-misses. Fewer correct answers beat more doubtful ones.
+- Aliases (optional, after "|") are alternate names people might type — never plurals or case variants.
+- Family-friendly only.`;
 
-const SLICES = [
-  {
-    key: 'core',
-    maxTokens: 2500,
-    instr: (p) => `Category: "${p}"
+const FANOUT = {
+  tiny: [],
+  small: [['A', 'Z']],
+  medium: [['A', 'F'], ['G', 'L'], ['M', 'R'], ['S', 'Z']],
+  large: [['A', 'C'], ['D', 'F'], ['G', 'I'], ['J', 'L'], ['M', 'O'], ['P', 'R'], ['S', 'S'], ['T', 'Z']],
+  huge: [['A', 'B'], ['C', 'C'], ['D', 'E'], ['F', 'G'], ['H', 'I'], ['J', 'K'], ['L', 'M'], ['N', 'O'], ['P', 'P'], ['Q', 'R'], ['S', 'S'], ['T', 'T'], ['U', 'Z']],
+};
+const PER_SLICE = { tiny: 80, small: 150, medium: 120, large: 140, huge: 170 };
+const TAG = { K: 'kindling', T: 'trailhead', B: 'backcountry', D: 'deepwoods' };
 
-First line: "PROMPT: <the category as a clear, family-friendly 'Name a/an ...' prompt (fix typos, keep the intent)>". If the category is hateful, sexual, or has fewer than ~8 valid answers, instead output only "REJECT: <short reason>" and stop.
-Then "GOLDEN: <answer | aliases>" and "NOTE: <one fun fact about it, under 120 characters>".
-Then 4–6 lines starting "K: " — the KINDLING answers.
-Then 10–20 lines starting "T: " — TRAILHEAD answers.`,
-  },
-  {
-    key: 'backcountry', tier: 'backcountry', maxTokens: 3500,
-    instr: (p) => `Category: "${p}"
+const coreInstr = (p) => `Category: "${p}"
 
-List 25–45 BACKCOUNTRY answers: uncommon but recognizable — skip the obvious answers everyone says first. If fewer exist, list what exists.`,
-  },
-  {
-    key: 'deepA', tier: 'deepwoods', maxTokens: 4500,
-    instr: (p) => `Category: "${p}"
+Line 1: "PROMPT: <the category as a clear, family-friendly 'Name a/an ...' prompt (fix typos, keep the intent)>" — or, if it is hateful, sexual, or has fewer than ~8 valid answers, only "REJECT: <short reason>" and stop.
+Line 2: "SIZE: tiny|small|medium|large|huge" — roughly how many valid answers exist (<40, 40–200, 200–1000, 1000–5000, 5000+).
+Line 3: "LOOKUP: <class>" or "LOOKUP: <class> | <entity>" if the answers are simply members of one encyclopedia class (e.g. "dog breed", "film | Pixar", "country | Africa", "painter"); otherwise "LOOKUP: none".
+Then 4–6 lines "K: <answer | aliases>".
+Then 8–14 lines "T: <answer | aliases>".
+Last line: "NICHEST: <the most obscure answer you are certain is correct> | <estimated % of people who'd recognise it, e.g. 0.3> | <fun fact under 120 characters>".`;
 
-List 30–70 DEEP WOODS answers (obscure, expert-level, still clearly correct) whose canonical name starts with a letter from A to L (or a digit). If fewer exist, list what exists.`,
-  },
-  {
-    key: 'deepB', tier: 'deepwoods', maxTokens: 4500,
-    instr: (p) => `Category: "${p}"
+const sliceInstr = (p, [a, b], n, wave) => `Category: "${p}"
 
-List 30–70 DEEP WOODS answers (obscure, expert-level, still clearly correct) whose canonical name starts with a letter from M to Z. If fewer exist, list what exists.`,
-  },
-];
+List up to ${n} ${wave ? 'MORE answers that most lists would miss — favour B and D, skip the famous ones —' : 'answers'} whose canonical name starts with ${a === b ? `the letter ${a}` : `a letter from ${a} to ${b}`} (ignore a leading "The", "A" or "An"; include digits with A).
+Each line: "TIER|Canonical name|alias|alias" where TIER is T, B or D (aliases optional).
+Final line: "NICHEST|<the most obscure answer in your list>|<estimated % of people who'd recognise it>|<fun fact under 120 characters>".
+If no valid answers start with those letters, output only "NONE".`;
+
+class Limiter {
+  constructor(n) { this.n = n; this.active = 0; this.q = []; }
+  run(fn, priority = false) {
+    return new Promise((resolve, reject) => {
+      const task = () => { this.active++; fn().then(resolve, reject).finally(() => { this.active--; this.next(); }); };
+      if (this.active < this.n) task();
+      else if (priority) this.q.unshift(task); else this.q.push(task);
+    });
+  }
+  next() { while (this.q.length && this.active < this.n) this.q.shift()(); }
+}
 
 class AIGen {
   constructor({ dataDir, log = console } = {}) {
     this.log = log;
     this.cacheFile = path.join(dataDir, 'generated.json');
-    this.cache = new Map(); // promptKey -> def
+    this.cache = new Map(); // promptKey -> def (AI and Wikidata-generated categories)
     this.judgeCache = new Map();
-    this.inflight = new Map(); // promptKey -> job
+    this.inflight = new Map();
+    this.limiter = new Limiter(CONCURRENCY);
     try {
       const raw = JSON.parse(fs.readFileSync(this.cacheFile, 'utf8'));
       for (const d of raw) this.cache.set(d.key, d);
@@ -102,52 +119,57 @@ class AIGen {
     return p;
   }
 
-  _saveCache() {
-    const arr = [...this.cache.values()].slice(-400);
-    fs.writeFile(this.cacheFile, JSON.stringify(arr), () => {});
-  }
-
   static promptKey(p) { return answerKey(p).slice(0, 120); }
 
-  /** Cached generated categories (for instant reuse / suggestions). */
+  /** Remember a finished generated category (AI or Wikidata) for instant reuse. */
+  remember(category, extra = {}) {
+    const key = AIGen.promptKey(category.prompt);
+    if (!key || category.size < 5) return;
+    this.cache.set(key, { key, ...category.toJSON(), total: category.size, generated: true, source: category.source, sourceLabel: category.sourceLabel, ...extra });
+    while (this.cache.size > 500) this.cache.delete(this.cache.keys().next().value);
+    clearTimeout(this._saveT);
+    this._saveT = setTimeout(() => fs.writeFile(this.cacheFile, JSON.stringify([...this.cache.values()]), () => {}), 1000);
+  }
+
   cachedList() {
     return [...this.cache.values()].map((d) => ({ id: d.id, prompt: d.prompt, total: d.total }));
   }
 
   getCached(prompt) {
-    const d = this.cache.get(AIGen.promptKey(prompt));
-    return d ? new Category({ ...d, generated: true }) : null;
+    const d = this.cache.get(AIGen.promptKey(polishPrompt(prompt))) || this.cache.get(AIGen.promptKey(prompt));
+    return d ? new Category({ ...d, generated: true, sourceLabel: d.sourceLabel || 'Ranger notebook' }) : null;
   }
 
-  async _streamLines(instr, maxTokens, onLine, signal) {
-    const stream = this.client.beta.messages.stream(this._params({
-      max_tokens: maxTokens,
-      system: SYSTEM,
-      output_config: { effort: 'low' },
-      messages: [{ role: 'user', content: instr }],
-    }), { signal });
-    let buf = '';
-    stream.on('text', (delta) => {
-      buf += delta;
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (line) onLine(line);
-      }
-    });
-    const msg = await stream.finalMessage();
-    if (buf.trim()) onLine(buf.trim());
-    if (msg.stop_reason === 'refusal') throw new Error('The ranger declined that category.');
-    return msg;
+  async _streamLines(instr, maxTokens, onLine, signal, priority = false) {
+    return this.limiter.run(async () => {
+      if (signal?.aborted) return null;
+      const stream = this.client.beta.messages.stream(this._params({
+        max_tokens: maxTokens,
+        system: SYSTEM,
+        output_config: { effort: 'low' },
+        messages: [{ role: 'user', content: instr }],
+      }), { signal });
+      let buf = '';
+      stream.on('text', (delta) => {
+        buf += delta;
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) onLine(line);
+        }
+      });
+      const msg = await stream.finalMessage();
+      if (buf.trim()) onLine(buf.trim());
+      if (msg.stop_reason === 'refusal') throw new Error('The ranger declined that category.');
+      return msg;
+    }, priority);
   }
 
   /**
-   * Generate a category on the fly.
-   * Returns { category, ready, done, abort }:
-   *  - category: live Category (complete=false until done)
-   *  - ready: resolves once the core slice (prompt/golden/common answers) is in
-   *  - done: resolves when every slice has finished
+   * Generate a category on the fly. Returns { category, ready, done, abort, how }.
+   *  - ready: resolves once the round is playable (~12 answers)
+   *  - done:  resolves when the first full search pass is finished (waves may continue while in play)
    */
   generate(rawPrompt, { onProgress } = {}) {
     const prompt = polishPrompt(rawPrompt);
@@ -155,71 +177,122 @@ class AIGen {
     const cached = this.cache.get(key);
     if (cached) {
       const category = new Category({ ...cached, generated: true });
-      return { category, ready: Promise.resolve(category), done: Promise.resolve(category), abort() {}, cached: true };
+      return { category, ready: Promise.resolve(category), done: Promise.resolve(category), abort() {}, how: 'cache' };
     }
     if (this.inflight.has(key)) return this.inflight.get(key);
 
     const controller = new AbortController();
-    const category = new Category({ id: 'ai-' + Date.now().toString(36), prompt, source: 'ai', sourceLabel: 'Ranger-generated', generated: true, complete: false });
+    const signal = controller.signal;
+    const category = new Category({ id: 'ai-' + Date.now().toString(36), prompt, source: 'ai', sourceLabel: 'Ranger-generated', generated: true, complete: false, goldenScale: 'pct' });
+    category.sources = new Set(['ai']);
     let rejectReason = null;
+    let promptSeen = false;
+    let size = null;
     let lastProgress = 0;
-    const progress = () => {
+    const tasks = [];
+    let readyResolve, readyReject;
+    const ready = new Promise((res, rej) => { readyResolve = res; readyReject = rej; });
+    let isReady = false;
+    const markReady = () => { if (!isReady && !rejectReason) { isReady = true; readyResolve(category); } };
+    const progress = (force) => {
+      if (!isReady && promptSeen && category.size >= READY_AT) markReady();
       const now = Date.now();
-      if (onProgress && now - lastProgress > 150) { lastProgress = now; onProgress(category); }
+      if (onProgress && (force || now - lastProgress > 150)) { lastProgress = now; onProgress(category); }
+    };
+    const offerNiche = (answer, pct, fact) => {
+      const n = parseFloat(String(pct).replace(/[^\d.]/g, ''));
+      if (!answer || !Number.isFinite(n)) return;
+      const e = category.add(answer, 'deepwoods');
+      category.offerGolden(e, n, fact);
     };
 
-    const runSlice = (slice) => this._streamLines(slice.instr(prompt), slice.maxTokens, (line) => {
-      if (slice.key === 'core') {
-        const m = /^(PROMPT|REJECT|GOLDEN|NOTE|K|T)\s*:\s*(.+)$/i.exec(line.replace(/^[-*•\s]+/, ''));
-        if (!m) return;
-        const tag = m[1].toUpperCase(), val = m[2].trim();
-        if (tag === 'PROMPT') category.prompt = polishPrompt(val) || category.prompt;
-        else if (tag === 'REJECT') { rejectReason = cleanText(val, 140); controller.abort(); }
-        else if (tag === 'GOLDEN') category.add(val, 'golden');
-        else if (tag === 'NOTE') { const g = category.goldenEntry(); if (g) g.note = cleanText(val, 200); }
-        else if (tag === 'K') category.add(val, 'kindling');
-        else if (tag === 'T') category.add(val, 'trailhead');
-      } else {
-        // strip list markers ("- ", "• ", "12. ") but keep answers that start with digits ("7 Up")
-        const clean = line.replace(/^(?:[-*•]\s*|\d{1,3}[.)]\s+)/, '').replace(/^[KTBDG]:\s*/, '').trim();
-        if (clean.length > 1 && clean.length < 120) category.add(clean, slice.tier);
-      }
+    // Wikidata in parallel: from the raw prompt now, or from Claude's LOOKUP hint if that fails
+    let wdJob = wikidata.generate(prompt, { into: category, onProgress: () => { category.sources.add('wikidata'); progress(); } });
+    let hint = null;
+    const wdTried = wdJob.ready.then(() => true, () => false);
+    tasks.push(wdJob.done.catch(() => {}));
+    const tryHint = () => wdTried.then((ok) => {
+      if (ok || !hint || hint === 'none' || signal.aborted) return;
+      wdJob = wikidata.generate(prompt, { into: category, hint, onProgress: () => { category.sources.add('wikidata'); progress(); } });
+      return wdJob.done.catch(() => {});
+    });
+
+    const launchFanout = (sz) => {
+      if (size) return;
+      size = FANOUT[sz] ? sz : 'medium';
+      const ranges = size === 'tiny' ? [['A', 'Z']] : FANOUT[size];
+      const n = PER_SLICE[size];
+      for (const r of ranges) tasks.push(runSlice(sliceInstr(prompt, r, n, false), Math.round(n * 9)).catch((err) => { if (!signal.aborted) this.log.warn?.(`[ai] slice ${r.join('-')} failed: ${err.message}`); }));
+    };
+
+    const runSlice = (instr, maxTokens) => this._streamLines(instr, maxTokens, (line) => {
+      if (line === 'NONE') return;
+      const parts = line.split('|').map((s) => s.trim());
+      const tag = parts[0].toUpperCase().replace(/[^A-Z]/g, '');
+      if (tag === 'NICHEST') { offerNiche(parts[1], parts[2], parts.slice(3).join(' ')); return; }
+      const tier = TAG[tag];
+      const rest = parts.slice(1).filter(Boolean).join('|');
+      if (tier && rest && rest.length < 120) category.add(rest, tier === 'kindling' ? 'trailhead' : tier);
       progress();
-    }, controller.signal);
+    }, signal);
 
-    const corePromise = runSlice(SLICES[0]);
-    const rest = SLICES.slice(1).map((s) => runSlice(s).catch((err) => {
-      if (!controller.signal.aborted) this.log.warn?.(`[ai] slice ${s.key} failed: ${err.message}`);
-    }));
+    const core = this._streamLines(coreInstr(prompt), 2200, (line) => {
+      const m = /^(PROMPT|REJECT|SIZE|LOOKUP|NICHEST|K|T)\s*:\s*(.+)$/i.exec(line.replace(/^[-*•\s]+/, ''));
+      if (!m) return;
+      const tag = m[1].toUpperCase(), val = m[2].trim();
+      if (tag === 'PROMPT') { category.prompt = polishPrompt(val) || category.prompt; promptSeen = true; }
+      else if (tag === 'REJECT') { rejectReason = cleanText(val, 140); controller.abort(); wdJob.abort(); readyReject(new Error(rejectReason)); }
+      else if (tag === 'SIZE') launchFanout(val.toLowerCase().replace(/[^a-z]/g, ''));
+      else if (tag === 'LOOKUP') { hint = cleanText(val, 80).toLowerCase() === 'none' ? 'none' : cleanText(val, 80); tasks.push(tryHint()); }
+      else if (tag === 'K') category.add(val, 'kindling');
+      else if (tag === 'T') category.add(val, 'trailhead');
+      else if (tag === 'NICHEST') { const [a, pct, ...fact] = val.split('|').map((s) => s.trim()); offerNiche(a, pct, fact.join(' ')); }
+      progress();
+    }, signal, true);
 
-    const ready = corePromise.then(() => {
+    core.then(() => {
+      promptSeen = true;
+      if (!size) launchFanout('medium');
+      if (category.size >= 4) markReady();
+      else if (!isReady) readyReject(new Error(rejectReason || 'Not enough answers for that category.'));
+    }, (err) => { if (!isReady) readyReject(new Error(rejectReason || err.message)); });
+
+    // first full pass, then deeper waves while the category is still being played
+    const waitAll = async () => {
+      let seen = 0;
+      while (seen < tasks.length) { const batch = tasks.slice(seen); seen = tasks.length; await Promise.allSettled(batch); }
+    };
+    const done = (async () => {
+      await core.catch(() => {});
+      await waitAll();
       if (rejectReason) throw new Error(rejectReason);
       if (category.size < 4) throw new Error('Not enough answers for that category.');
-      return category;
-    }, (err) => {
-      if (rejectReason) throw new Error(rejectReason);
-      throw err;
-    });
-
-    const done = Promise.allSettled([ready, ...rest]).then(([r]) => {
+      progress(true);
       this.inflight.delete(key);
-      if (r.status === 'rejected') throw r.reason;
-      category.complete = true;
-      const def = { key, ...category.toJSON(), total: category.size, generated: true };
-      this.cache.set(key, def);
-      this._saveCache();
-      onProgress?.(category);
+      this.remember(category);
       return category;
-    });
+    })();
+    done.then(async () => {
+      // keep searching past the first pass while campers are still on this trail
+      if (!WAVES || !['medium', 'large', 'huge'].includes(size)) { category.complete = true; onProgress?.(category); return; }
+      for (let w = 0; w < WAVES && category.active !== false && !signal.aborted; w++) {
+        const ranges = FANOUT[size];
+        await Promise.allSettled(ranges.map((r) => runSlice(sliceInstr(category.prompt, r, PER_SLICE[size], true), Math.round(PER_SLICE[size] * 9))));
+        progress(true);
+      }
+      category.complete = true;
+      this.remember(category);
+      onProgress?.(category);
+    }, () => {});
     done.catch(() => {});
-    ready.catch(() => { controller.abort(); this.inflight.delete(key); });
+    ready.catch(() => { controller.abort(); wdJob.abort(); this.inflight.delete(key); });
 
-    const job = { category, ready, done, abort: () => controller.abort(), cached: false };
+    const job = { category, ready, done, abort: () => { controller.abort(); wdJob.abort(); }, how: 'ai' };
     this.inflight.set(key, job);
     return job;
   }
 
-  /** Ask a ranger whether an unlisted answer is valid. ~1s. */
+  /** Ask a ranger whether an unlisted answer is valid (+ how niche it is). ~1s. */
   async judge(prompt, answer) {
     const ck = AIGen.promptKey(prompt) + '::' + answerKey(answer);
     if (this.judgeCache.has(ck)) return this.judgeCache.get(ck);
@@ -235,8 +308,9 @@ class AIGen {
               valid: { type: 'boolean' },
               canonical: { type: 'string' },
               tier: { type: 'string', enum: ['kindling', 'trailhead', 'backcountry', 'deepwoods'] },
+              known_pct: { type: 'number' },
             },
-            required: ['valid', 'canonical', 'tier'],
+            required: ['valid', 'canonical', 'tier', 'known_pct'],
             additionalProperties: false,
           },
         },
@@ -244,7 +318,7 @@ class AIGen {
       messages: [{
         role: 'user',
         content: `Party game referee. Category: "${prompt}". A player answered: "${cleanText(answer, 60)}".
-Is this a genuinely correct answer for the category (allow minor misspellings and common alternate names)? If valid, give its canonical name and how commonly people would think of it: kindling (almost everyone), trailhead (common), backcountry (uncommon), deepwoods (obscure).`,
+Is this a genuinely correct answer for the category (allow misspellings and common alternate names)? If valid, give its canonical name, how readily people think of it — kindling (almost everyone), trailhead (common), backcountry (fans/enthusiasts), deepwoods (obscure) — and known_pct: the estimated % of people who'd recognise it.`,
       }],
     }), { signal: AbortSignal.timeout(7000) });
     if (msg.stop_reason === 'refusal') return { valid: false };

@@ -243,7 +243,10 @@ function renderLobby() {
   start.disabled = seated.length < 2;
   let status = '';
   if (s.quick) {
-    status = s.autoStartMs != null ? `🔥 Fire lights in ${Math.ceil(s.autoStartMs / 1000)}s… (${seated.length}/8 campers)` : `🥾 Waiting for more campers to hike in… (${seated.length}/8 — need 2)`;
+    const cap = s.settings.maxPlayers;
+    status = s.autoStartMs != null
+      ? `${cap === 2 ? '⚔️ Duel begins' : '🔥 Fire lights'} in ${Math.ceil(s.autoStartMs / 1000)}s… (${seated.length}/${cap} campers)`
+      : cap === 2 ? '⚔️ Waiting for a challenger to hike in… (1/2)' : `🥾 Waiting for more campers to hike in… (${seated.length}/${cap} — need 2)`;
   } else if (!isHost) {
     status = '⛺ Waiting for the camp counselor to light the fire…';
   } else if (seated.length < 2) {
@@ -287,7 +290,12 @@ function renderSettings(isHost) {
     <h3>🗺️ Trail Rules ${app.room.quick ? '<small class="muted">(ranked rules are fixed)</small>' : isHost ? '' : '<small class="muted">(set by the counselor)</small>'}</h3>
     <div class="settings-grid">
       <div class="set-group"><h4>Game mode</h4><div class="mode-cards">${modes}</div></div>
-      <div class="set-group"><h4>Gimmick</h4><div class="seg">${gimmicks}</div>
+      ${s.mode === 'duel' ? `<div class="set-group duel-box"><h4>⚔️ Duel trail</h4>
+        <p class="muted" style="margin:0 0 6px;font-size:.82rem">One question bank for the whole duel. Type any category (it's scouted on the fly) or leave it random. Hike the entire bank and it's a tie!</p>
+        <form class="fg-row" id="duel-form"><input id="duel-trail" maxlength="90" placeholder="Random Krillion daily — or type e.g. Name a dinosaur" value="${esc(s.duelTrail || '')}" ${dis ? 'disabled' : ''}>
+        ${dis ? '' : '<button class="btn btn-small btn-fire" type="submit">Set</button><button class="btn btn-small btn-ghost" type="button" id="duel-random">🎲 Random</button>'}</form>
+        <div class="pack-line">${s.duelTrail ? `Dueling on: <b>${esc(s.duelTrail)}</b>` : '🎲 A random Krillion daily (small enough to finish)'}</div></div>` : ''}
+      <div class="set-group" ${s.mode === 'duel' ? 'style="display:none"' : ''}><h4>Gimmick</h4><div class="seg">${gimmicks}</div>
         <div class="muted" style="margin-top:6px;font-size:.82rem">${esc(cat.gimmicks[s.gimmick].desc)}</div>
         ${s.gimmick !== 'none' ? `<div class="set-row"><label>Special round every<small>poofs between special rounds</small></label>${stepper('specialEvery', s.specialEvery, 2, 6, 1, ' rounds', dis)}</div>` : ''}
       </div>
@@ -302,8 +310,8 @@ function renderSettings(isHost) {
         <div class="set-row"><label>${s.mode === 'mystery' ? 'Average hidden fuse' : s.mode === 'wildfire' ? 'Starting fuse' : 'Fuse per turn'}</label>${stepper('fuseSec', s.fuseSec, 5, 40, 1, 's', dis)}</div>
         <div class="set-row"><label>Extra lives<small>nicher answers roast the marshmallow faster — max one over your start</small></label>${toggle('extraLives', s.extraLives, dis || s.mode === 'lonewolf')}</div>
         ${s.extraLives ? `<div class="set-row"><label>Points per extra life</label>${stepper('extraLifeGoal', s.extraLifeGoal, 150, 1500, 50, ' pts', dis)}</div>` : ''}
-        <div class="set-row"><label>Typo forgiveness<small>accept tiny misspellings</small></label>${toggle('typoTolerance', s.typoTolerance, dis)}</div>
-        ${ai ? `<div class="set-row"><label>AI Ranger judge<small>checks unlisted answers on generated categories</small></label>${toggle('aiJudge', s.aiJudge, dis)}</div>` : ''}
+        <div class="set-row"><label>Autocorrect<small>Strong fixes typos, sound-alikes, doubled letters & surnames</small></label><span class="seg">${['off', 'gentle', 'strong'].map((v) => `<button class="${s.typoTolerance === v ? 'sel' : ''}" data-typo="${v}" ${dis ? 'disabled' : ''}>${v === 'off' ? 'Off' : v === 'gentle' ? 'Gentle' : '💪 Strong'}</button>`).join('')}</span></div>
+        <div class="set-row"><label>Ranger judge<small>live-checks answers missing from generated lists (Wikidata${ai ? ' + AI' : ''}) — a nicher find can steal the Golden Antler</small></label>${toggle('aiJudge', s.aiJudge, dis)}</div>
         ${!app.room.quick ? `<div class="set-row"><label>Public campfire<small>list on the trailhead board</small></label>${toggle('isPublic', s.isPublic, dis)}</div>` : ''}
       </div>
     </div>`;
@@ -320,8 +328,14 @@ function renderSettings(isHost) {
     const v = Math.max(+b.dataset.min, Math.min(+b.dataset.max, Number(s[k]) + Number(b.dataset.d)));
     sendSettings({ [k]: v });
   }));
+  $$('[data-typo]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ typoTolerance: b.dataset.typo })));
   $$('[data-toggle]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ [b.dataset.toggle]: !s[b.dataset.toggle] })));
   $('#btn-pick-pack', root)?.addEventListener('click', () => { sfx.click(); openFieldGuide({ forRoom: true }); });
+  const duelForm = $('#duel-form', root);
+  if (duelForm) {
+    duelForm.addEventListener('submit', (e) => { e.preventDefault(); sendSettings({ duelTrail: $('#duel-trail', root).value.trim() }); toast('⚔️ Duel trail set!', 'good'); });
+    $('#duel-random', root).addEventListener('click', () => sendSettings({ duelTrail: '' }));
+  }
 }
 
 // ---------------------------------------------------------------- wire up
@@ -330,6 +344,10 @@ function bind() {
   $('#btn-quick').addEventListener('click', () => {
     sfx.click();
     app.socket.emit('room:quick', {}, (res) => { if (!res?.ok) return toast(res?.error || 'No trail found.', 'err'); enteredRoom(res.code); });
+  });
+  $('#btn-duel').addEventListener('click', () => {
+    sfx.chop();
+    app.socket.emit('room:quickduel', {}, (res) => { if (!res?.ok) return toast(res?.error || 'No challenger found.', 'err'); enteredRoom(res.code); });
   });
   $('#btn-create').addEventListener('click', () => {
     sfx.click();

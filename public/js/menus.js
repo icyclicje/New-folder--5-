@@ -94,12 +94,14 @@ export function openHowTo() {
       <li>📻 Chat on the Ranger Radio anytime.</li>
     </ul>
     <h3>Rarity tiers</h3>
-    <p>Every category has five tiers. The nicher your answer, the more points — and points roast your 🍡 marshmallow toward an <b>extra life</b> (it takes a while, and you can only ever hold one more life than you started with). Each category hides exactly one <b>Golden Antler</b> answer.</p>
+    <p>Every category has five tiers. The nicher your answer, the more points — and points roast your 🍡 marshmallow toward an <b>extra life</b> (it takes a while, and you can only ever hold one more life than you started with). Each category hides exactly one <b>Golden Antler</b> — the nichest answer on the trail. On generated trails the ranger keeps scouting during play, so the antler can wander deeper, and if <i>you</i> name something even nichier, it becomes yours. Autocorrect is strong by default: typos, sound-alikes, doubled letters and surnames all count.</p>
     <table class="tier-table">${tiers}</table>
     <h3>Game modes</h3><ul>${modes}</ul>
     <h3>Gimmicks</h3><ul>${gm}</ul>
     <h3>Question banks</h3>
     <p><b>Krillion Dailies</b> (default) — every daily Krillion prompt since Dive #1, with thousands of tiered answers each. <b>Campfire Classics</b> — hand-built camping categories. <b>My Field Guide</b> — your own packs: write categories by hand, generate any category on the fly, or type a <b>topic</b> and generate a whole question bank.</p>
+    <h3>⚔️ Quick 1v1 Duel</h3>
+    <p>Matchmade 1v1 on <b>one question bank</b> for the whole duel. Trade answers until someone poofs — hike the entire bank and it's a tie. Custom duels can use any category you type.</p>
     <h3>Quick Trek</h3>
     <p>Ranked matchmaking into an up-to-8-camper party using Krillion dailies and Campfire Classic rules. Your rating moves with every placement. Wins unlock gear at the 🛶 Trading Post.</p>
   </div>` });
@@ -116,7 +118,8 @@ export function openResults(ev) {
     <span class="delta ${r.ratingDelta > 0 ? 'up' : r.ratingDelta < 0 ? 'down' : ''}">${r.ratingDelta != null ? `${r.ratingDelta > 0 ? '+' : ''}${r.ratingDelta} → ${r.rating}` : ''}</span></li>`).join('');
   const unlocks = meRes?.unlocks?.length ? `<div class="unlocks">🎁 <b>New at the Trading Post:</b> ${meRes.unlocks.map((u) => esc(u.name)).join(', ')}!</div>` : '';
   const winner = ev.results.find((r) => r.placement === 1);
-  resultsModal = modal({ title: winner ? `🏆 ${winner.name} survives the night!` : '🏕️ The fire burned out', html: `
+  const title = ev.tie ? '🤝 A tie — the whole trail was hiked!' : winner ? `🏆 ${winner.name} survives the night!` : '🏕️ The fire burned out';
+  resultsModal = modal({ title, html: `
     <div class="podium">${podium}</div>
     ${ev.ranked ? '<p class="muted" style="text-align:center">🏅 Ranked trek — ratings updated.</p>' : ''}
     <ol class="results-list">${rows}</ol>${unlocks}

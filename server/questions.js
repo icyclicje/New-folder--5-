@@ -8,7 +8,8 @@
 const fs = require('fs');
 const path = require('path');
 const { Category, sanitizeCategoryDef } = require('./answers');
-const { shuffle, pick, polishPrompt, cleanText, promptTokens } = require('./util');
+const { shuffle, pick, polishPrompt, cleanText, promptTokens, answerKey: answerKeyOf } = require('./util');
+const wikidata = require('./wikidata');
 const { expandTopic, rankPrompts, findSamePrompt, associationBoard } = require('./fallback');
 
 class QuestionService {
@@ -62,10 +63,11 @@ class QuestionService {
   }
 
   /** Pick the next category for a game. */
-  pickForGame(source, usedIds, customDefs) {
+  pickForGame(source, usedIds, customDefs, { duel = false } = {}) {
     const tryKrillion = () => {
       if (!this.krillion.ready) return null;
-      const [id] = this.krillion.randomIds(1, usedIds);
+      // duels play ONE bank to the end — pick banks small enough that clearing them (a tie) is possible
+      const [id] = duel ? this.krillion.randomIds(1, usedIds, 30, 350) : this.krillion.randomIds(1, usedIds);
       return id ? this.krillion.getCategory(id) : null;
     };
     const tryCampfire = () => {
@@ -117,32 +119,74 @@ class QuestionService {
       const same = findSamePrompt(prompt, this.allSummaries());
       if (same) {
         const c = this.getById(same.id);
-        if (c) return { category: c, ready: Promise.resolve(c), done: Promise.resolve(c), abort() {}, how: 'known' };
+        if (c) {
+          // instant — and if the curated list is small, keep scouting Wikidata for more real answers during play
+          let done = Promise.resolve(c);
+          if (c.size < 400 && !c.wd) {
+            c.respectTiers = true;
+            c.complete = false;
+            const ext = wikidata.generate(prompt, { into: c, onProgress });
+            done = ext.done.catch(() => c).finally(() => { c.complete = true; onProgress?.(c); }).then(() => c);
+          }
+          return { category: c, ready: Promise.resolve(c), done, abort() {}, how: 'known' };
+        }
       }
     }
-    if (this.ai.enabled) {
-      const job = this.ai.generate(prompt, { onProgress });
-      job.how = job.cached ? 'cache' : 'ai';
-      return job;
-    }
-    // No AI key: prefer a known trail that covers every content word of the request…
+    const cached = this.ai.getCached(prompt);
+    if (cached) return { category: cached, ready: Promise.resolve(cached), done: Promise.resolve(cached), abort() {}, how: 'cache' };
+    if (this.ai.enabled) return this.ai.generate(prompt, { onProgress }); // Claude + Wikidata, merged live
+
+    // No AI key: 1) Wikidata — real members ranked by fame, thousands for broad categories
     const linked = /linked to "(.+)"/i.exec(prompt);
-    let phrase = linked ? linked[1] : prompt
+    const phrase = linked ? linked[1] : prompt
       .replace(/^name\s+/i, '')
       .replace(/^(a|an|the|some|something|someone|any)\s+/i, '')
       .replace(/^(types?|kinds?|sorts?|varieties|variety|brands?)\s+of\s+/i, '');
-    if (allowKnown && !linked) {
-      const want = promptTokens(prompt);
-      if (want.length) {
-        const hit = rankPrompts(prompt, this.allSummaries()).find((s) => s.total >= 15 && want.every((w) => promptTokens(s.prompt).includes(w)));
+    const job = { category: null, abort() {}, how: 'wikidata' };
+    const wd = linked ? null : wikidata.generate(prompt, { onProgress });
+    if (wd) { job.category = wd.category; job.abort = wd.abort; }
+    const fallback = async () => {
+      // 2) a known trail that covers every content word of the request
+      if (allowKnown && !linked) {
+        const want = promptTokens(prompt);
+        const hit = want.length && rankPrompts(prompt, this.allSummaries()).find((s) => s.total >= 15 && want.every((w) => promptTokens(s.prompt).includes(w)));
         const c = hit && this.getById(hit.id);
-        if (c) return { category: c, ready: Promise.resolve(c), done: Promise.resolve(c), abort() {}, how: 'known' };
+        if (c) { job.how = 'known'; return c; }
       }
-    }
-    // …otherwise build a word-association board.
-    const p = associationBoard(phrase);
-    p.catch(() => {}); // callers that only speculate never await this
-    return { category: null, ready: p, done: p, abort() {}, how: 'assoc' };
+      // 3) a word-association board
+      job.how = 'assoc';
+      return associationBoard(phrase);
+    };
+    job.ready = wd ? wd.ready.catch(fallback) : fallback();
+    job.done = wd
+      ? wd.done.then((c) => { this.ai.remember(c); return c; }, () => job.ready)
+      : job.ready;
+    job.ready.catch(() => {}); // callers that only speculate never await this
+    job.done.catch(() => {});
+    return job;
+  }
+
+  /** Can unlisted answers in this category be checked live? */
+  canJudge(category) {
+    return !!category?.wd || (this.ai.enabled && !!category?.generated);
+  }
+
+  /**
+   * Ranger check for an unlisted answer. Wikidata (free, ~0.5s) and Claude race;
+   * the first "valid" wins. Results are cached per category, so a check started
+   * while the player was still typing makes Enter instant.
+   */
+  judge(category, text) {
+    const key = answerKeyOf(text);
+    const cache = category._judged || (category._judged = new Map());
+    if (cache.has(key)) return cache.get(key);
+    const tasks = [];
+    if (category.wd) tasks.push(wikidata.judge(category.wd, text).then((v) => (v.valid ? { ...v, by: 'wikidata' } : Promise.reject(new Error('no')))));
+    if (this.ai.enabled && category.generated) tasks.push(this.ai.judge(category.prompt, text).then((v) => (v.valid ? { ...v, by: 'ai' } : Promise.reject(new Error('no')))));
+    const p = tasks.length ? Promise.any(tasks).catch(() => ({ valid: false })) : Promise.resolve({ valid: false });
+    cache.set(key, p);
+    if (cache.size > 400) cache.delete(cache.keys().next().value);
+    return p;
   }
 
   /** Echo Trail prompt from the last answer. */
@@ -188,12 +232,22 @@ class QuestionService {
       return results;
     }
 
-    // No AI: assemble the bank from every known prompt that fits the topic.
+    // No AI: if the topic itself is a Wikidata class ("dinosaurs", "cheese"), that's a fresh category with thousands of answers…
+    const wdTopic = wikidata.generate(`Name a ${topic}`);
+    const wdDef = await Promise.race([wdTopic.done, new Promise((r) => setTimeout(r, 12000))]).catch(() => null);
+    // …then assemble the rest from every known prompt that fits the topic.
     const expanded = await expandTopic(topic);
     const ranked = rankPrompts(topic, this.allSummaries(), expanded).filter((s) => s.total >= 12);
-    const chosen = ranked.slice(0, count);
+    const useWd = wdDef && wdDef.size >= 12;
+    const chosen = ranked.slice(0, useWd ? count - 1 : count);
     onPlan?.(chosen.map((c) => c.prompt));
     const results = [];
+    if (useWd) {
+      this.ai.remember(wdDef);
+      const def = { ...wdDef.toJSON(), generated: true };
+      results.push(def);
+      onCategory?.(def);
+    }
     for (const c of chosen) {
       const def = { id: c.id, ref: c.id, prompt: c.prompt, source: c.source, total: c.total };
       results.push(def);

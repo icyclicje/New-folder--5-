@@ -227,10 +227,10 @@ class KrillionBank {
   }
 
   /** Random prompt ids not in `exclude`, preferring prompts with enough answers. */
-  randomIds(count, exclude = new Set(), minTotal = 25) {
+  randomIds(count, exclude = new Set(), minTotal = 25, maxTotal = Infinity) {
     const all = [];
     for (const qs of this.index.values()) for (const q of qs) if (!exclude.has(q.id)) all.push(q);
-    let pool = all.filter((q) => q.total >= minTotal);
+    let pool = all.filter((q) => q.total >= minTotal && q.total <= maxTotal);
     if (pool.length < count) pool = all;
     return shuffle(pool).slice(0, count).map((q) => q.id);
   }

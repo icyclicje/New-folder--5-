@@ -5,7 +5,17 @@ A fast-paced campfire elimination word game for **2–8 campers**. Everyone sits
 ## Features
 
 - **Krillion question bank (default).** The server crawls every daily Krillion prompt since Dive #1 (805+ prompts, up to ~8,000 tiered answers each) and refreshes every few hours for new dailies.
-- **Five rarity tiers.** Same structure and point ladder as Krillion's, re-skinned: 🪵 Kindling 10 · 🥾 Trailhead 30 · 🏕️ Backcountry 60 · 🌲 Deep Woods 85 · 🦌 Golden Antler 100. Each category hides one Golden Antler answer with a fun fact.
+- **Five rarity tiers.** Same structure and point ladder as Krillion's, re-skinned: 🪵 Kindling 10 · 🥾 Trailhead 30 · 🏕️ Backcountry 60 · 🌲 Deep Woods 85 · 🦌 Golden Antler 100. Each category hides one Golden Antler answer with a fun fact. On generated categories it is the nichest verifiable answer.
+- **The Golden Antler can move.** Generated categories keep scouting for more answers during play. If a nichier answer turns up, the Golden Antler moves to it. If a player names something nichier than the current Golden Antler, they claim it. Once found, it never moves.
+- **Strong autocorrect by default.** Off / Gentle / Strong. Strong fixes:
+  - keyboard typos
+  - doubled letters ("raviolli")
+  - sound-alikes ("sekwoya" → Sequoia)
+  - abbreviations (St, Mt, n)
+  - surnames ("Monet" → Claude Monet)
+  - single distinctive words ("tulip" → Tulip tree)
+
+  Ties go to an unused answer, and then to the more common, lower-scoring one.
 - **Extra lives.** Points fill a 🍡 marshmallow meter toward an extra life. It takes a while, and you can never hold more than one life over your start.
 - **What everyone can see:**
   - live typing from whoever holds the moose
@@ -16,6 +26,7 @@ A fast-paced campfire elimination word game for **2–8 campers**. Everyone sits
 - **Chat.** Public 📻 Ranger Radio chat in the lobby and in game.
 - **Room codes and invite links.** Use `/r/ABCD`. Public lobbies appear on the home page.
 - **Quick Trek.** Ranked matchmaking into an up-to-8-camper party with Elo ratings, ranks and a Lodge Leaderboard.
+- **⚔️ Quick 1v1 Duel.** Ranked 1v1 matchmaking on one question bank for the whole match. Hike every answer in the bank and it's a tie. Custom duels can use any category you type.
 - **Six modes, 2–8 player cap:**
 
   | Mode | Rule |
@@ -43,13 +54,40 @@ A fast-paced campfire elimination word game for **2–8 campers**. Everyone sits
 
 ## How questions get generated
 
-| Situation | With `ANTHROPIC_API_KEY` | Without a key |
-|---|---|---|
-| A custom category | Four parallel streaming Claude requests, one per rarity slice. The round starts when the common answers arrive; deep cuts keep streaming in during play. Results are cached. | Matches a known Krillion or Campfire prompt that covers the request. Otherwise builds a word-association board from Datamuse. |
-| Topic → bank | Claude plans N categories, then generates three at a time. | Assembles the bank from every matching Krillion or Campfire prompt. |
-| Unlisted answer | An "AI Ranger judge" checks it (on generated categories). The turn timer pauses while it checks. | Rejected ("not on the trail map"). |
+Every typed category (Leader's Pick, Echo Trail, duel trails, the Field Guide) tries the following in order:
 
-The default model is `claude-opus-5-5` at low effort with server-side refusal fallbacks. For more speed, set `MIVI_AI_FAST=1` (Opus fast mode, premium pricing) or `MIVI_AI_MODEL`.
+1. **An exact known prompt.** This is instant (Krillion, Campfire Classics, or the generated cache). If the curated list is small, the ranger keeps scouting Wikidata in the background and adds real answers without changing the curated tiers.
+2. **Wikidata (no key needed).** Members of the matching class are ranked by real-world fame: the number of Wikipedia editions covering each one.
+   - It understands phrasings like "dog breed", "type of pasta", "Pixar movie", "country in Africa", "famous painter" (people ranked by their main occupation), "dinosaur" (taxa, without birds) and "Taylor Swift song".
+   - Tiers follow fame percentiles, so broad categories get thousands of Trailhead and Backcountry answers.
+   - Deep Woods only keeps items at least two Wikipedias cover.
+3. **Claude, if `ANTHROPIC_API_KEY` is set.** This runs alongside Wikidata, and the results merge live:
+   - A small core stream returns the prompt, a size estimate, a Wikidata lookup hint and the obvious answers.
+   - The round starts at about 12 answers.
+   - Letter-range streams fan out in proportion to the category's size: 1 for small, 4 for medium, 8 for large, 13 for huge.
+   - Every answer is tagged with a tier.
+   - Every stream reports its nichest answer with an estimated "% who'd know it", and the Golden Antler sits on the lowest one.
+   - An extra search wave runs while the category is still in play.
+4. **Fallback.** A known prompt covering every word of the request. Otherwise, a Datamuse word-association board.
+
+**Ranger checks** cover answers missing from a generated list:
+
+- Wikidata, which is free, and Claude race each other, and the first "valid" wins.
+- Checks start while the player is still typing, so pressing Enter is usually instant. Otherwise a Wikidata check takes about 0.3–0.9s.
+
+**Topic → bank:** Claude plans N categories, then generates three at a time. Without a key, the bank uses the topic's own Wikidata class plus every matching Krillion or Campfire prompt.
+
+The default model is `claude-opus-5-5` at low effort, with server-side refusal fallbacks. Optional tuning:
+
+| Variable | Effect |
+|---|---|
+| `MIVI_AI_FAST=1` | Opus fast mode (premium pricing) |
+| `MIVI_AI_MODEL` | Model used for generation |
+| `MIVI_AI_CONCURRENCY` | Parallel streams (default 16) |
+| `MIVI_AI_WAVES` | Extra in-play search waves (default 1) |
+| `MIVI_QLEVER_URL` | Alternative Wikidata SPARQL engine |
+
+A large generated category with Claude streams roughly 15–30k output tokens. If cost matters, lower the waves or the concurrency.
 
 ## Run locally
 
@@ -79,9 +117,10 @@ server/
   room.js        lobby, chat and the authoritative game engine (turns, fuses, gimmicks, rating)
   krillion.js    Krillion archive crawler and disk cache
   questions.js   question sources, fast on-the-fly paths, topic → bank
-  ai.js          Claude streaming generator, answer judge, Echo prompts
-  fallback.js    no-key generation (archive search + Datamuse associations)
-  answers.js     tiered category index with plural, alias and typo matching
+  ai.js          Claude size-aware fan-out generator, answer judge, Echo prompts
+  wikidata.js    Wikidata generator (fame-ranked tiers, nichest Golden Antler) + fast live judge
+  fallback.js    no-key fallbacks (archive search + Datamuse associations)
+  answers.js     tiered category index, strong autocorrect, Golden Antler bookkeeping
   bots.js        critter bots
   profiles.js    profile store and placement-based Elo
   cosmetics.js   Trading Post catalog
