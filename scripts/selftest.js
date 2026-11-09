@@ -204,6 +204,41 @@ async function main() {
   ok(!Kp.hints.some((h) => h.status === 'fuzzy'), 'hints are private to the holder (the other camper never saw the typo hint)');
   Gk.s.close(); Kp.s.close();
 
+  // ---------------------------------------------------------- game 5: every turn is a special round
+  console.log('\n🔁 Game 5 — every turn is a special round');
+  const Hm = client('Hemlock'), Iw = client('Ironwood');
+  await Hm.hello(); await Iw.hello();
+  const r5 = await Hm.emit('room:create', { settings: { mode: 'classic', gimmick: 'echotrail', specialEvery: 0, lives: 3, fuseSec: 12 } });
+  await Iw.emit('room:join', { code: r5.code });
+  await Hm.emit('room:pack', { pack: rulesPack });
+  await sleep(300);
+  ok(Hm.state?.settings?.specialEvery === 0, 'a special round every turn can be selected');
+  let answered5 = false;
+  let cat5 = null;
+  for (const c of [Hm, Iw]) {
+    const prev = c.onEv;
+    c.onEv = (ev) => {
+      prev?.(ev);
+      if (ev.type === 'category') cat5 = ev.category.prompt;
+      if (ev.type === 'turn' && ev.pid === c.id && !answered5) {
+        const a = localR(cat5 || c.state?.game?.category?.prompt)[0];
+        if (a) { answered5 = true; c.s.emit('submit', { text: a }); }
+      }
+    };
+  }
+  await Hm.emit('room:start', {});
+  const acc5 = await Hm.waitEv('accept', 30000).catch(() => null);
+  const sp5 = await Hm.waitEv('special', 5000).catch(() => null);
+  ok(!!acc5 && sp5?.kind === 'echotrail', sp5 ? `the accepted answer “${acc5.answer}” started a special round right away (echo of “${sp5.from}”)` : 'an accepted answer starts a special round');
+  const after5 = Hm.events.slice(Hm.events.indexOf(acc5)).map((e) => e.type);
+  ok(after5.indexOf('special') > 0 && (after5.indexOf('turn') < 0 || after5.indexOf('special') < after5.indexOf('turn')), 'the next camper waits for the special round (no turn starts in between)');
+  ok(Hm.state?.game?.specialIn === 0, 'the HUD reports a special round every turn');
+  const ecat5 = await Iw.waitEv('category', 30000, (e) => e.reason === 'echo').catch(() => null);
+  ok(!!ecat5, ecat5 ? `mid-round echo trail carved: “${ecat5.category.prompt}”` : 'echo category generated mid-round');
+  const turn5 = ecat5 ? await Iw.waitEv('turn', 10000, (e) => e.pid === Iw.id).catch(() => null) : null;
+  ok(!!turn5, 'play resumes with the next camper on the new trail');
+  Hm.s.close(); Iw.s.close();
+
   // ---------------------------------------------------------- quick play
   console.log('\n🥾 Quick Trek matchmaking');
   const Q1 = client('Quaking Aspen'), Q2 = client('Quince');

@@ -2,8 +2,11 @@
 import { $, $$, esc, toast, tierVar, bannerStyle } from './ui.js';
 import { sfx } from './sfx.js';
 import { mascotSVG, mooseSVG, stumpSVG } from './art.js';
+import { icon } from './icons.js';
 
-const TIER_ICON = { kindling: '🪵', trailhead: '🥾', backcountry: '🏕️', deepwoods: '🌲', golden: '🦌' };
+const TIER_ICON = { kindling: icon('log'), trailhead: icon('boot'), backcountry: icon('tent'), deepwoods: icon('pine'), golden: icon('antler') };
+const LIFE = icon('life');
+const LOST = icon('ember');
 const TIER_NAME = { kindling: 'Kindling', trailhead: 'Trailhead', backcountry: 'Backcountry', deepwoods: 'Deep Woods', golden: 'Golden Antler' };
 const REJECT_TEXT = {
   taken: (e) => `🚫 "${e.answer}" was already hiked by ${e.by || 'someone'}!`,
@@ -11,7 +14,10 @@ const REJECT_TEXT = {
   'too-common': (e) => `🪵 "${e.answer}" is Kindling — too easy for the Deep Woods!`,
   'judge-error': () => '📡 The ranger could not check that one — try another.',
 };
-const PARTICLES = ['🍂', '🍁', '🌿', '🪶', '✨', '💨', '🌰'];
+// [icon, colour] confetti sets
+const PARTICLES = [['leaf', '#e9a23b'], ['maple', '#ef6a2e'], ['leaf', '#9fd97f'], ['maple', '#d9482f'], ['sparkles', '#ffd36a'], ['feather', '#efe3c8'], ['acorn', '#c48a52']];
+const GOLDEN_FX = [['sparkles', '#ffe58a'], ['star', '#ffcf4a'], ['antler', '#ffd66e'], ['sparkles', '#fff3c4']];
+const DEEP_FX = [['pine', '#9fd97f'], ['leaf', '#4fd3c6'], ['sparkles', '#b9a2ff']];
 
 export class GameView {
   constructor(app) {
@@ -205,7 +211,7 @@ export class GameView {
         el.dataset.pid = pid;
         el.innerHTML = `<div class="bubble last hidden"></div><div class="bubble typing hidden"></div>
           <div class="stump"><svg class="ring hidden" viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="44"/><circle class="fg" cx="50" cy="50" r="44" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"/></svg>
-          <span class="crown hidden">👑</span><span class="mascot-slot"></span>${stumpSVG()}</div>
+          <span class="crown hidden">${icon('crown')}</span><span class="ghost">${icon('ghost')}</span><span class="mascot-slot"></span>${stumpSVG()}</div>
           <div class="plate"></div><div class="lives"></div><div class="meter"><i></i></div><div class="wrongs"></div>`;
         const p = this.positions.get(pid);
         el.style.left = p.x + '%';
@@ -233,7 +239,7 @@ export class GameView {
       plate.title = `${p.name} · ${p.score} pts`;
       // lives
       let lives = '';
-      for (let i = 0; i < p.maxLives; i++) lives += `<span class="life ${i < p.lives ? '' : 'lost'}">${i < p.lives ? '🔥' : '🪵'}</span>`;
+      for (let i = 0; i < p.maxLives; i++) lives += `<span class="life ${i < p.lives ? '' : 'lost'}">${i < p.lives ? LIFE : LOST}</span>`;
       el.querySelector('.lives').innerHTML = p.alive ? lives : `<small>#${p.placement ?? '–'}</small>`;
       // meter
       const meter = el.querySelector('.meter');
@@ -248,7 +254,7 @@ export class GameView {
       if (p.lastAnswer && !typingVisible) {
         last.classList.remove('hidden');
         last.style.setProperty('--tc', tierVar(p.lastAnswer.tier));
-        last.textContent = `${TIER_ICON[p.lastAnswer.tier]} ${p.lastAnswer.text}`;
+        last.innerHTML = `${TIER_ICON[p.lastAnswer.tier] || ''}${esc(p.lastAnswer.text)}`;
       } else last.classList.add('hidden');
       // wrong guesses
       const isTurn = g.turn?.pid === pid && (g.stage === 'turn' || g.stage === 'judging');
@@ -272,7 +278,7 @@ export class GameView {
     $('#cat-src').innerHTML = `${esc(c.sourceLabel || c.source)}${c.total ? ` · <b class="count-tick">${c.total.toLocaleString()}</b> answers across 5 tiers` : ''}${c.complete === false ? ' · <span class="scouting"><span class="spin">🧭</span> ranger still scouting deeper…</span>' : ''}`;
     const minIdx = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'].indexOf(g.minTier || mode.minTier || 'kindling');
     $('#tier-chips').innerHTML = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'].map((t, i) =>
-      `<span class="tier-chip ${i < minIdx ? 'banned' : ''}" style="--tc:${tierVar(t)}" title="${TIER_NAME[t]}">${TIER_ICON[t]} ${TIER_NAME[t]} ${c.counts?.[t] ?? 0}</span>`).join('');
+      `<span class="tier-chip ${i < minIdx ? 'banned' : ''}" style="--tc:${tierVar(t)}" title="${TIER_NAME[t]}">${TIER_ICON[t]} ${TIER_NAME[t]} <span class="n">${(c.counts?.[t] ?? 0).toLocaleString()}</span></span>`).join('');
   }
 
   renderHud(s) {
@@ -283,7 +289,8 @@ export class GameView {
     if (s.settings.gimmick !== 'none') {
       const gm = cat.gimmicks[s.settings.gimmick];
       const n = g.specialIn;
-      const label = n === 0 ? 'now!' : `in <b>${n}</b> round${n === 1 ? '' : 's'}`;
+      const every = s.settings.specialEvery;
+      const label = every === 0 ? '<b>every turn</b>' : every === 1 ? '<b>every round</b>' : n === 0 ? 'now!' : `in <b>${n}</b> round${n === 1 ? '' : 's'}`;
       html += `<span class="pill">${gm.icon} ${esc(gm.name)} ${label}${g.echoFrom && s.settings.gimmick === 'echotrail' ? ` · echo: “${esc(g.echoFrom)}”` : ''}</span>`;
     }
     if (g.ranked) html += '<span class="pill">🏅 <b>Ranked</b></span>';
@@ -298,7 +305,7 @@ export class GameView {
     const el = $('#me-status');
     if (!p) { el.innerHTML = ''; return; }
     let lives = '';
-    for (let i = 0; i < p.maxLives; i++) lives += `<span class="life ${i < p.lives ? '' : 'lost'}">${i < p.lives ? '🔥' : '🪵'}</span>`;
+    for (let i = 0; i < p.maxLives; i++) lives += `<span class="life ${i < p.lives ? '' : 'lost'}">${i < p.lives ? LIFE : LOST}</span>`;
     const goal = s.settings.extraLifeGoal;
     const meter = s.settings.extraLives && p.alive
       ? `<div class="me-meter">🍡 ${p.lives >= p.maxLives ? 'Max lives!' : `${p.meter}/${goal}`}<div class="meter ${p.lives >= p.maxLives ? 'max' : ''}"><i style="width:${Math.min(100, (p.meter / goal) * 100)}%"></i></div></div>` : '';
@@ -467,6 +474,12 @@ export class GameView {
     m.style.top = y + '%';
   }
 
+  setTimerText(key) {
+    if (this.timerKey === key) return;
+    this.timerKey = key;
+    $('#moose-timer').innerHTML = key === 'paused' ? icon('compass') : esc(key);
+  }
+
   loop() {
     if (!this.mounted) return;
     this.raf = requestAnimationFrame(() => this.loop());
@@ -480,7 +493,7 @@ export class GameView {
       if (c) {
         const left = Math.max(0, (this.introEnd || 0) - performance.now());
         const n = Math.ceil(left / 1000);
-        if (c.textContent !== String(n || '🔥')) { c.textContent = n || '🔥'; if (n > 0) sfx.drum(n === 1); }
+        if (c.dataset.n !== String(n)) { c.dataset.n = String(n); c.innerHTML = n ? String(n) : icon('fire'); if (n > 0) sfx.drum(n === 1); }
       }
     }
     // leader pick timer bar
@@ -491,7 +504,7 @@ export class GameView {
     if (!active) {
       m.style.setProperty('--puff', '0');
       m.classList.remove('danger', 'critical');
-      timerEl.textContent = '';
+      this.setTimerText('');
       for (const el of this.seatEls.values()) el.querySelector('.ring').classList.add('hidden');
       return;
     }
@@ -501,12 +514,12 @@ export class GameView {
     if (t.hidden) {
       const el = (performance.now() - t.start) / 1000;
       puff = Math.min(0.9, 0.12 + 0.75 * (1 - Math.exp(-el / 7))) + Math.sin(performance.now() / 180) * 0.04;
-      timerEl.textContent = '?';
+      this.setTimerText('?');
       timerEl.classList.remove('hot');
     } else {
       puff = 1 - remaining / t.total;
       const secs = Math.ceil(remaining / 1000);
-      timerEl.textContent = t.paused ? '🧭' : String(secs);
+      this.setTimerText(t.paused ? 'paused' : String(secs));
       timerEl.classList.toggle('hot', remaining < 3000);
       m.classList.toggle('danger', remaining < 3000 && !t.paused);
       m.classList.toggle('critical', remaining < 1200 && !t.paused);
@@ -561,7 +574,9 @@ export class GameView {
       const ang = Math.random() * Math.PI * 2;
       const dist = 60 + Math.random() * 160;
       p.style.cssText = `left:${x}%;top:${y}%;--dx:${Math.cos(ang) * dist}px;--dy:${Math.sin(ang) * dist - 30}px;--rot:${Math.random() * 720 - 360}deg;--life:${0.8 + Math.random() * 0.7}s`;
-      p.textContent = set[Math.floor(Math.random() * set.length)];
+      const [name, colour] = set[Math.floor(Math.random() * set.length)];
+      p.style.color = colour;
+      p.innerHTML = icon(name);
       fx.appendChild(p);
       setTimeout(() => p.remove(), 1600);
     }
@@ -614,7 +629,7 @@ export class GameView {
         sfx.accept(ev.tier);
         this.floatText(ev.pid, `+${ev.pts}<small>${TIER_ICON[ev.tier]} ${TIER_NAME[ev.tier]}${ev.fuzzy ? ' (close enough!)' : ''}</small>`, ev.tier);
         const pt = this.arenaPoint(ev.pid);
-        if (ev.tier === 'deepwoods' || ev.tier === 'golden') this.burst(pt.x, pt.y, 12, ev.tier === 'golden' ? ['✨', '🌟', '🦌', '⭐'] : ['🌲', '🍃', '✨']);
+        if (ev.tier === 'deepwoods' || ev.tier === 'golden') this.burst(pt.x, pt.y, 12, ev.tier === 'golden' ? GOLDEN_FX : DEEP_FX);
         if (ev.tier === 'golden') {
           const who = s?.players.find((p) => p.id === ev.pid);
           const el = document.createElement('div');

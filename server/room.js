@@ -37,7 +37,7 @@ function normalizeSettings(input, prev = DEFAULT_SETTINGS) {
   }
   if (GIMMICKS[i.gimmick]) s.gimmick = i.gimmick;
   if (SOURCES[i.source]) s.source = i.source;
-  if (i.specialEvery != null) s.specialEvery = clamp(i.specialEvery | 0, 2, 6);
+  if (i.specialEvery != null) s.specialEvery = clamp(i.specialEvery | 0, 0, 6); // 0 = every turn, 1 = every round
   if (i.maxPlayers != null) s.maxPlayers = clamp(i.maxPlayers | 0, LIMITS.minPlayers, LIMITS.maxPlayers);
   if (i.lives != null) s.lives = clamp(i.lives | 0, 1, 5);
   if (i.fuseSec != null) s.fuseSec = clamp(Number(i.fuseSec) || 12, 5, 40);
@@ -674,11 +674,14 @@ class Room {
     } else {
       const limit = this.trailLimit();
       const rotate = MODES[this.settings.mode].rotateEvery;
+      if (this.specialEveryTurn()) return this.specialNow(this.passFrom(p.id));
       if (limit && g.catAnswers >= limit) {
         if (limit !== rotate) this.sys(`🗺️ ${g.catAnswers} answers on “${g.category.prompt}” — the moose heads down a fresh trail!`, 'game');
+        if (this.specialEveryRound()) return this.specialNow(this.passFrom(p.id));
         this.nextCategory('limit');
       } else if (this.eligibleRemaining() < 2) {
         this.sys('🗺️ That trail is all hiked out — new category!');
+        if (this.specialEveryRound()) return this.specialNow(this.passFrom(p.id));
         this.nextCategory('rotate');
       }
     }
@@ -730,7 +733,8 @@ class Room {
     g.nextHolder = this.nextAlive(p.id);
     g.intermissionEndsAt = Date.now() + POP_PAUSE_MS;
     const duel = this.isDuel();
-    const special = !duel && this.settings.gimmick !== 'none' && (g.round - 1) % this.settings.specialEvery === 0;
+    const N = this.settings.specialEvery;
+    const special = !duel && this.settings.gimmick !== 'none' && (N <= 1 || (g.round - 1) % N === 0);
     if (special && this.settings.gimmick === 'echotrail') this.prepareEcho(); // start right away, during the pause
     this.emitState();
     this.setT(() => {
@@ -765,10 +769,25 @@ class Room {
   }
 
   // ---------------- gimmicks ----------------
+  /** Every accepted answer hands the next camper a special round. */
+  specialEveryTurn() { return this.settings.gimmick !== 'none' && this.settings.specialEvery === 0 && !this.isDuel(); }
+  /** Every new trail (after a poof, or when a trail runs out) is a special round. */
+  specialEveryRound() { return this.settings.gimmick !== 'none' && this.settings.specialEvery <= 1 && !this.isDuel(); }
+
+  /** Start a special round mid-round (the moose is between campers, nobody's fuse is running). */
+  specialNow(nextId) {
+    const g = this.game;
+    g.nextHolder = nextId;
+    this.clearT(g.turnTimer);
+    if (this.settings.gimmick === 'echotrail') this.prepareEcho();
+    this.beginSpecial();
+  }
+
   specialIn() {
     const g = this.game;
     if (!g || this.settings.gimmick === 'none') return null;
     const N = this.settings.specialEvery;
+    if (N === 0) return 0;
     const r = (g.round - 1) % N;
     return r === 0 && g.round > 1 ? 0 : N - r;
   }
@@ -882,7 +901,8 @@ class Room {
   maybeSpeculateEcho() {
     const g = this.game;
     if (!g || this.settings.gimmick !== 'echotrail') return;
-    if (g.round % this.settings.specialEvery !== 0) return; // next round isn't an echo round
+    const N = this.settings.specialEvery;
+    if (N > 1 && g.round % N !== 0) return; // next round isn't an echo round
     const last = g.lastAccepted;
     if (!last) return;
     if (g.echoSpec?.answer === last.text) return;

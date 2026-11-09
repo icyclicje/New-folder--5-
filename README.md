@@ -53,9 +53,16 @@ A fast-paced campfire elimination word game for **2–8 campers**. Everyone sits
   | 🐺 Lone Wolf | One life |
 
   Every mode uses the same rules for every seat, a random first holder and a fixed clockwise order.
-- **Gimmicks (every N rounds):**
+- **Gimmicks.** Special rounds come every 2–6 rounds, **every round** (every new trail, including when a long trail runs out), or **every turn** (every accepted answer hands the next camper a special round):
   - **🪓 Leader's Pick.** The camper with the most lives (ties: most points) types any category, and it's generated on the fly. They get 40 seconds by default. Generation starts while they're still typing.
-  - **📣 Echo Trail.** The last answer guessed seeds a related next category. That category is pre-computed while the previous round is still being played.
+  - **📣 Echo Trail.** The last answer guessed seeds a related next category. That category is pre-computed while the previous round is still being played. On "every turn", each answer branches the trail again, so the category changes with every pass of the moose.
+- **A distinctive look, drawn entirely in code.** No image files or emoji fonts:
+  - **Dusk Ranger** style: an indigo night with ember light, 70s sunset stripes, paper grain and topographic contour lines on the cards.
+  - **Art:** shaded storybook mascots with a campfire rim light, the Mivimoose (snout, bell and wide palmate antlers), a campfire with layered flames, mossy stumps, and a moonlit lake under three rows of pines.
+  - **Campsite emblem** on the home page; matching favicon.
+  - **Icons:** one duotone line set; emoji from the server and UI are swapped for it automatically.
+  - **Type:** Fraunces for display and Manrope for the interface.
+  - **Around the fire:** a dotted trail ring links the stumps.
 - **📒 Field Guide (custom questions):**
   - **Generate any category** you type, with all five tiers.
   - **Type a topic** and get a **whole question bank**. Categories stream in, and a lobby can start playing after the first few.

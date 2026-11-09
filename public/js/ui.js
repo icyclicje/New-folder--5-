@@ -23,7 +23,7 @@ export function modal({ title, html = '', wide = false, onClose } = {}) {
   const back = document.createElement('div');
   back.className = 'modal-backdrop';
   back.innerHTML = `<div class="modal panel ${wide ? 'wide' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-    <div class="modal-head"><h2>${esc(title)}</h2><button class="modal-close" aria-label="Close">✕</button></div>
+    <div class="modal-head"><h2>${esc(title)}</h2><button class="modal-close" aria-label="Close"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button></div>
     <div class="modal-body">${html}</div></div>`;
   $('#modal-root').appendChild(back);
   const close = () => {

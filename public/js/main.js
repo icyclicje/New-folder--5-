@@ -1,7 +1,8 @@
 // Mivimoose Party — app controller: connection, profile, screens, lobby.
 import { $, $$, esc, toast, modal, store, copyText, bannerStyle, closeAllModals } from './ui.js';
 import { sfx, audio } from './sfx.js';
-import { mascotSVG, mooseSVG, campfireSVG, forestSVG } from './art.js';
+import { mascotSVG, mooseSVG, campfireSVG, forestSVG, starsSVG, emblemSVG, markSVG, installTextures } from './art.js';
+import { installIcons, icon } from './icons.js';
 import { GameView } from './game.js';
 import { openTradingPost, openLeaderboard, openHowTo, openResults } from './menus.js';
 import { openFieldGuide, packForRoom } from './editor.js';
@@ -21,10 +22,15 @@ window.__mivi = app; // handy for debugging in the console
 
 // ---------------------------------------------------------------- boot
 function decorate() {
+  installTextures();
+  installIcons();
   $('#bg').innerHTML = forestSVG();
+  $('#stars').innerHTML = starsSVG();
+  $('#brand-mark').innerHTML = markSVG();
+  $('#hero-emblem').innerHTML = emblemSVG();
   $('#hero-moose').innerHTML = mooseSVG();
   const ff = $('#fireflies');
-  for (let i = 0; i < 22; i++) {
+  for (let i = 0; i < 18; i++) {
     const f = document.createElement('div');
     f.className = 'firefly';
     const r = () => `${Math.round(Math.random() * 160 - 80)}px`;
@@ -275,8 +281,9 @@ function sendSettings(patch) {
   app.socket.emit('room:settings', { settings: patch });
 }
 
-function stepper(key, val, min, max, step, suffix, disabled, zeroLabel) {
-  const shown = zeroLabel && Number(val) === 0 ? zeroLabel : `${val}${suffix}`;
+function stepper(key, val, min, max, step, suffix, disabled, labels) {
+  const map = labels && typeof labels === 'object' ? labels : labels ? { 0: labels } : {};
+  const shown = map[Number(val)] ?? `${val}${suffix}`;
   return `<span class="stepper"><button data-step="${key}" data-d="${-step}" data-min="${min}" data-max="${max}" ${disabled ? 'disabled' : ''} aria-label="less">−</button><b>${shown}</b><button data-step="${key}" data-d="${step}" data-min="${min}" data-max="${max}" ${disabled ? 'disabled' : ''} aria-label="more">+</button></span>`;
 }
 function toggle(key, on, disabled) { return `<button class="toggle ${on ? 'on' : ''}" data-toggle="${key}" ${disabled ? 'disabled' : ''} aria-pressed="${on}"></button>`; }
@@ -302,7 +309,7 @@ function renderSettings(isHost) {
         <div class="pack-line">${s.duelTrail ? `Dueling on: <b>${esc(s.duelTrail)}</b>` : '🎲 A random Krillion daily (small enough to finish)'}</div></div>` : ''}
       <div class="set-group" ${s.mode === 'duel' ? 'style="display:none"' : ''}><h4>Gimmick</h4><div class="seg">${gimmicks}</div>
         <div class="set-desc">${esc(cat.gimmicks[s.gimmick].desc)}</div>
-        ${s.gimmick !== 'none' ? `<div class="set-row"><label>Special round every<small>poofs between special rounds</small></label>${stepper('specialEvery', s.specialEvery, 2, 6, 1, ' rounds', dis)}</div>` : ''}
+        ${s.gimmick !== 'none' ? `<div class="set-row"><label>Special round every<small>${s.specialEvery === 0 ? 'every answer starts a special round for the next camper' : s.specialEvery === 1 ? 'every new trail is a special round' : 'poofs between special rounds'}</small></label>${stepper('specialEvery', s.specialEvery, 0, 6, 1, ' rounds', dis, { 0: 'Every turn', 1: 'Every round' })}</div>` : ''}
       </div>
       <div class="set-group"><h4>Question bank</h4><div class="seg">${sources}</div>
         <div class="set-desc">${esc(cat.sources[s.source].desc)}</div>
@@ -420,7 +427,7 @@ function bind() {
   });
 
   const syncAudioBtns = () => {
-    $('#btn-mute').textContent = audio.prefs.muted ? '🔇' : '🔊';
+    $('#btn-mute').innerHTML = icon(audio.prefs.muted ? 'mute' : 'volume');
     $('#btn-ambient').style.opacity = audio.prefs.ambient ? '1' : '.45';
   };
   $('#btn-mute').addEventListener('click', () => { audio.setMuted(!audio.prefs.muted); syncAudioBtns(); sfx.click(); });

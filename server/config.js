@@ -68,18 +68,18 @@ const MODES = {
   },
 };
 
-// Gimmicks layer on top of any mode. Special rounds fire every N poofs.
+// Gimmicks layer on top of any mode. Special rounds fire every N poofs, every round (1) or every turn (0).
 const GIMMICKS = {
   none: { name: 'No Gimmick', icon: '🏕️', desc: 'Just the classic loop.' },
   leaderpick: {
     name: "Leader's Pick",
     icon: '🪓',
-    desc: 'Every few rounds the camper with the most lives (ties: most points) carves a brand-new category onto the trail sign — answers are generated on the fly.',
+    desc: 'On each special round the camper with the most lives (ties: most points) carves a brand-new category onto the trail sign — answers are generated on the fly.',
   },
   echotrail: {
     name: 'Echo Trail',
     icon: '📣',
-    desc: 'Every few rounds the last answer guessed echoes into the next category, so the trail keeps branching.',
+    desc: 'On each special round the last answer guessed echoes into the next category, so the trail keeps branching.',
   },
 };
 
