@@ -157,9 +157,22 @@ class QuestionService {
       job.how = 'assoc';
       return associationBoard(phrase);
     };
-    job.ready = wd ? wd.ready.catch(fallback) : fallback();
+    // Wikidata normally answers in 1–4s; if it's having a slow day, a known trail that covers the request beats waiting
+    job.ready = wd
+      ? new Promise((resolve, reject) => {
+        let settled = false;
+        const t = setTimeout(async () => {
+          if (settled || linked || !allowKnown) return;
+          const want = promptTokens(prompt);
+          const hit = want.length && rankPrompts(prompt, this.allSummaries()).find((x) => x.total >= 15 && want.every((w) => promptTokens(x.prompt).includes(w)));
+          const c = hit && this.getById(hit.id);
+          if (c && !settled) { settled = true; job.how = 'known'; wd.abort(); resolve(c); }
+        }, 10000);
+        wd.ready.then((c) => { if (!settled) { settled = true; clearTimeout(t); resolve(c); } }, (err) => { if (settled) return; clearTimeout(t); settled = true; fallback().then(resolve, reject); });
+      })
+      : fallback();
     job.done = wd
-      ? wd.done.then((c) => { this.ai.remember(c); return c; }, () => job.ready)
+      ? job.ready.then((c) => (c === wd.category ? wd.done.then((d) => { this.ai.remember(d); return d; }, () => c) : c))
       : job.ready;
     job.ready.catch(() => {}); // callers that only speculate never await this
     job.done.catch(() => {});
@@ -184,9 +197,15 @@ class QuestionService {
     if (category.wd) tasks.push(wikidata.judge(category.wd, text).then((v) => (v.valid ? { ...v, by: 'wikidata' } : Promise.reject(new Error('no')))));
     if (this.ai.enabled && category.generated) tasks.push(this.ai.judge(category.prompt, text).then((v) => (v.valid ? { ...v, by: 'ai' } : Promise.reject(new Error('no')))));
     const p = tasks.length ? Promise.any(tasks).catch(() => ({ valid: false })) : Promise.resolve({ valid: false });
+    p.then((v) => { p.settled = v; });
     cache.set(key, p);
     if (cache.size > 400) cache.delete(cache.keys().next().value);
     return p;
+  }
+
+  /** A ranger verdict that has already come back (or null) — used for instant typing hints. */
+  judgedSync(category, text) {
+    return category?._judged?.get(answerKeyOf(text))?.settled || null;
   }
 
   /** Echo Trail prompt from the last answer. */

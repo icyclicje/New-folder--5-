@@ -74,7 +74,7 @@ const GIMMICKS = {
   leaderpick: {
     name: "Leader's Pick",
     icon: '🪓',
-    desc: 'Every few rounds the camper in the lead carves a brand-new category onto the trail sign — answers are generated on the fly.',
+    desc: 'Every few rounds the camper with the most lives (ties: most points) carves a brand-new category onto the trail sign — answers are generated on the fly.',
   },
   echotrail: {
     name: 'Echo Trail',
@@ -105,6 +105,23 @@ const DEFAULT_SETTINGS = {
   isPublic: false,
   duelTrail: '',
   customPack: null,
+  // --- custom campsite rules ---
+  pickSec: 40, // Leader's Pick: seconds to carve a custom category
+  genTrailMax: 14, // custom / generated trails move on after this many answers (0 = until a poof)
+  trailMax: 0, // EVERY trail moves on after this many answers (0 = until a poof)
+  tierFloor: 'auto', // auto (mode decides) | kindling | trailhead | backcountry — the most common tier that still counts
+  moosePath: 'clockwise', // clockwise | random — where the moose runs after a good answer
+  goldenLife: false, // finding a Golden Antler heals one lost life
+  showTyping: true, // everyone sees the holder's live typing
+  revealLeftovers: true, // show unfound answers after a poof
+  liveHints: true, // the holder sees autocorrect / ranger previews while typing
+};
+
+// Ranges for the numeric custom rules (shared by server validation and the lobby UI).
+const SETTING_RANGES = {
+  pickSec: [15, 90, 5],
+  genTrailMax: [0, 40, 2],
+  trailMax: [0, 40, 2],
 };
 
 const LIMITS = {
@@ -134,5 +151,5 @@ function rankFor(rating) {
 
 module.exports = {
   TIERS, TIER_BY_KEY, KRILLION_TIER_MAP, MODES, GIMMICKS, SOURCES,
-  DEFAULT_SETTINGS, LIMITS, RANKS, rankFor,
+  DEFAULT_SETTINGS, SETTING_RANGES, LIMITS, RANKS, rankFor,
 };

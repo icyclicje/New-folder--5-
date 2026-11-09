@@ -20,6 +20,8 @@ function client(name) {
   s.on('ev', (ev) => { c.events.push(ev); c.onEv?.(ev); });
   s.on('chat', (m) => c.chats.push(m));
   s.on('typing', (t) => c.typing.push(t));
+  c.hints = [];
+  s.on('hint', (h) => c.hints.push(h));
   c.emit = (ev, data) => new Promise((res) => s.emit(ev, data, res));
   c.hello = async () => { const r = await c.emit('hello', { name }); c.id = r.profile.id; return r; };
   c.waitEv = (type, ms = 20000, pred = () => true) => new Promise((res, rej) => {
@@ -127,7 +129,8 @@ async function main() {
   autoPlay(C, { stopAfter: 50 });
   await C.emit('room:start', {});
   const special = await C.waitEv('special', 60000).catch(() => null);
-  ok(special && special.kind === 'leaderpick' && special.leaderId === C.id, 'special round: C (in the lead) gets to carve the sign');
+  ok(special && special.kind === 'leaderpick' && special.leaderId === C.id, 'special round: C (most lives) gets to carve the sign');
+  ok(special && special.totalMs === 40000, `carving time comes from the room rules (${(special?.totalMs || 0) / 1000}s)`);
   const t0 = Date.now();
   C.s.emit('typing', { text: 'Name a type of che' });
   C.s.emit('leader:pick', { text: 'Name a type of cheese' });
@@ -151,6 +154,55 @@ async function main() {
   const ecat = await F.waitEv('category', 30000, (e) => e.reason === 'echo').catch(() => null);
   ok(!!ecat, ecat ? `echo category: “${ecat.category.prompt}” (${ecat.category.total} answers, via ${ecat.how})` : 'echo category generated');
   E.s.close(); F.s.close();
+
+  // ---------------------------------------------------------- game 4: custom rules, live hints, trail length
+  console.log('\n⚙️ Game 4 — custom rules, live autocorrect hints, trail length');
+  const Gk = client('Ginkgo'), Kp = client('Kapok');
+  await Gk.hello(); await Kp.hello();
+  const rulesPack = { name: 'Rules test', categories: [
+    { prompt: 'Name a fruit', golden: { answer: 'Durian' }, tiers: { kindling: ['Apple', 'Banana', 'Orange', 'Grape'], trailhead: ['Mango', 'Kiwi', 'Papaya', 'Peach'], backcountry: ['Lychee', 'Guava'], deepwoods: ['Rambutan'] } },
+    { prompt: 'Name a colour', golden: { answer: 'Vermilion' }, tiers: { kindling: ['Red', 'Blue', 'Green', 'Yellow'], trailhead: ['Purple', 'Pink', 'Teal', 'Brown'], backcountry: ['Maroon', 'Indigo'], deepwoods: ['Puce'] } },
+  ] };
+  const r4R = await Gk.emit('room:create', { settings: { mode: 'classic', lives: 3, fuseSec: 12, trailMax: 2, genTrailMax: 0, tierFloor: 'kindling', moosePath: 'random', pickSec: 999, liveHints: true, revealLeftovers: false } });
+  await Kp.emit('room:join', { code: r4R.code });
+  await Gk.emit('room:pack', { pack: rulesPack });
+  await sleep(300);
+  const st4R = Gk.state?.settings || {};
+  ok(st4R.trailMax === 2 && st4R.moosePath === 'random' && st4R.tierFloor === 'kindling', 'custom rules saved (trail length 2, random moose path, all tiers count)');
+  ok(st4R.pickSec === 90, `out-of-range rules are clamped (pick time 999 → ${st4R.pickSec}s)`);
+  const localR = (prompt) => { const d = rulesPack.categories.find((c) => c.prompt === prompt); return d ? Object.values(d.tiers).flat() : []; };
+  const used4R = new Set();
+  let catNowR = null;
+  const answererR = (c, withHints) => {
+    const prev = c.onEv;
+    c.onEv = async (ev) => {
+      prev?.(ev);
+      if (ev.type === 'category') { catNowR = ev.category.prompt; used4R.clear(); }
+      if (ev.type === 'accept') used4R.add(ev.answer.toLowerCase());
+      if (ev.type === 'turn' && ev.pid === c.id) {
+        const a = localR(catNowR || c.state?.game?.category?.prompt).find((x) => !used4R.has(x.toLowerCase()));
+        if (!a) return;
+        if (withHints && !c.hintChecked) {
+          c.hintChecked = true;
+          c.s.emit('typing', { text: a });
+          await sleep(350);
+          c.s.emit('typing', { text: a.slice(0, -1) + a.slice(-1).repeat(2) }); // a doubled-letter slip
+          await sleep(350);
+        }
+        c.s.emit('typing', { text: a });
+        await sleep(120);
+        c.s.emit('submit', { text: a });
+      }
+    };
+  };
+  answererR(Gk, true); answererR(Kp, false);
+  await Gk.emit('room:start', {});
+  const limR = await Gk.waitEv('category', 60000, (e) => e.reason === 'limit').catch(() => null);
+  ok(!!limR, limR ? `after 2 answers the moose moved to a fresh trail: “${limR.category.prompt}”` : 'trail length limit moved the moose on');
+  ok(Gk.hints.some((h) => h.status === 'match'), 'live hint: exact answer shows ✓ to the holder');
+  ok(Gk.hints.some((h) => h.status === 'fuzzy'), 'live hint: a typo shows the autocorrected answer');
+  ok(!Kp.hints.some((h) => h.status === 'fuzzy'), 'hints are private to the holder (the other camper never saw the typo hint)');
+  Gk.s.close(); Kp.s.close();
 
   // ---------------------------------------------------------- quick play
   console.log('\n🥾 Quick Trek matchmaking');

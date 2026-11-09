@@ -12,8 +12,10 @@
  *    tiny ones aren't padded with nonsense.
  *  - Wikidata runs at the same time and merges real, fame-ranked members.
  *  - While the category is still in play, extra "waves" keep searching deeper.
- *  - Every stream reports its NICHEST answer with an estimated % of people who'd
- *    know it; the Golden Antler always sits on the nichest one found so far.
+ *  - Golden Antler: when the category maps to a Wikidata class, Wikidata picks the nichest
+ *    VERIFIABLE member (fewest Wikipedia editions, then fewest readers). Claude's NICHEST
+ *    suggestions are checked against Wikidata and only take the antler if they're real and
+ *    nicher still. Without a Wikidata class, Claude's lowest "% who'd know it" wins.
  *
  * Requires ANTHROPIC_API_KEY. Without it, questions.js uses Wikidata + fallbacks.
  */
@@ -32,6 +34,9 @@ const USE_FALLBACKS = process.env.MIVI_AI_FALLBACKS !== '0';
 const CONCURRENCY = Math.max(2, parseInt(process.env.MIVI_AI_CONCURRENCY || '16', 10));
 const WAVES = Math.max(0, parseInt(process.env.MIVI_AI_WAVES || '1', 10)); // extra deep-search waves while in play
 const READY_AT = 12;
+const SLICE_MODEL = process.env.MIVI_AI_SLICE_MODEL || MODEL; // e.g. a faster model for the bulk letter slices
+const CACHE_VERSION = 3; // bump when generation quality changes so stale boards are re-scouted
+const CACHE_MAX_ENTRIES = 80000; // total answers kept in the notebook on disk
 
 const SYSTEM = `You build answer boards for Mivimoose Party, a fast multiplayer party game in the style of Krillion: players take turns naming ONE valid answer to a category prompt, and nicher answers score more.
 
@@ -45,7 +50,7 @@ For broad categories most valid answers are T or B — reserve D for the truly o
 Rules:
 - Plain text only, one item per line, exactly in the requested format. No numbering, headings or commentary.
 - Every answer must be real and unambiguously satisfy the prompt. Never invent, stretch the category, or include near-misses. Fewer correct answers beat more doubtful ones.
-- Aliases (optional, after "|") are alternate names people might type — never plurals or case variants.
+- Canonical names are the most common English name ("Garlic", not "Allium sativum"). Aliases (optional, after "|") are other names people really type: short forms, nicknames, scientific or original-language names ("T. rex", "soccer") — never plurals or case variants.
 - Family-friendly only.`;
 
 const FANOUT = {
@@ -63,8 +68,8 @@ const coreInstr = (p) => `Category: "${p}"
 Line 1: "PROMPT: <the category as a clear, family-friendly 'Name a/an ...' prompt (fix typos, keep the intent)>" — or, if it is hateful, sexual, or has fewer than ~8 valid answers, only "REJECT: <short reason>" and stop.
 Line 2: "SIZE: tiny|small|medium|large|huge" — roughly how many valid answers exist (<40, 40–200, 200–1000, 1000–5000, 5000+).
 Line 3: "LOOKUP: <class>" or "LOOKUP: <class> | <entity>" if the answers are simply members of one encyclopedia class (e.g. "dog breed", "film | Pixar", "country | Africa", "painter"); otherwise "LOOKUP: none".
-Then 4–6 lines "K: <answer | aliases>".
-Then 8–14 lines "T: <answer | aliases>".
+Then 5–8 lines "K: <answer | aliases>" — the answers most people say first.
+Then 10–16 lines "T: <answer | aliases>" — other well-known answers.
 Last line: "NICHEST: <the most obscure answer you are certain is correct> | <estimated % of people who'd recognise it, e.g. 0.3> | <fun fact under 120 characters>".`;
 
 const sliceInstr = (p, [a, b], n, wave) => `Category: "${p}"
@@ -96,7 +101,7 @@ class AIGen {
     this.limiter = new Limiter(CONCURRENCY);
     try {
       const raw = JSON.parse(fs.readFileSync(this.cacheFile, 'utf8'));
-      for (const d of raw) this.cache.set(d.key, d);
+      for (const d of raw) if ((d.v || 0) >= CACHE_VERSION) this.cache.set(d.key, d);
     } catch { /* none yet */ }
     this._client = null;
   }
@@ -125,8 +130,15 @@ class AIGen {
   remember(category, extra = {}) {
     const key = AIGen.promptKey(category.prompt);
     if (!key || category.size < 5) return;
-    this.cache.set(key, { key, ...category.toJSON(), total: category.size, generated: true, source: category.source, sourceLabel: category.sourceLabel, ...extra });
-    while (this.cache.size > 500) this.cache.delete(this.cache.keys().next().value);
+    this.cache.delete(key); // re-insert as newest
+    this.cache.set(key, { key, v: CACHE_VERSION, ...category.toJSON(), total: category.size, generated: true, source: category.source, sourceLabel: category.sourceLabel, ...extra });
+    let total = 0;
+    for (const d of this.cache.values()) total += d.total || 0;
+    while (this.cache.size > 1 && (this.cache.size > 300 || total > CACHE_MAX_ENTRIES)) {
+      const [k, d] = this.cache.entries().next().value;
+      total -= d.total || 0;
+      this.cache.delete(k);
+    }
     clearTimeout(this._saveT);
     this._saveT = setTimeout(() => fs.writeFile(this.cacheFile, JSON.stringify([...this.cache.values()]), () => {}), 1000);
   }
@@ -140,10 +152,11 @@ class AIGen {
     return d ? new Category({ ...d, generated: true, sourceLabel: d.sourceLabel || 'Ranger notebook' }) : null;
   }
 
-  async _streamLines(instr, maxTokens, onLine, signal, priority = false) {
+  async _streamLines(instr, maxTokens, onLine, signal, priority = false, model = MODEL) {
     return this.limiter.run(async () => {
       if (signal?.aborted) return null;
       const stream = this.client.beta.messages.stream(this._params({
+        model,
         max_tokens: maxTokens,
         system: SYSTEM,
         output_config: { effort: 'low' },
@@ -199,21 +212,39 @@ class AIGen {
       const now = Date.now();
       if (onProgress && (force || now - lastProgress > 150)) { lastProgress = now; onProgress(category); }
     };
+    // Golden Antler candidates from Claude wait until we know whether Wikidata can verify them
+    const nicheQueue = [];
+    let nicheMode = null; // 'verify' (Wikidata class known) | 'pct' (no class — trust Claude's estimate)
     const offerNiche = (answer, pct, fact) => {
       const n = parseFloat(String(pct).replace(/[^\d.]/g, ''));
-      if (!answer || !Number.isFinite(n)) return;
-      const e = category.add(answer, 'deepwoods');
-      category.offerGolden(e, n, fact);
+      if (!answer || !Number.isFinite(n) || answer.length > 80) return;
+      if (!nicheMode) { nicheQueue.push([answer, n, fact]); return; }
+      if (nicheMode === 'pct') { const e = category.add(answer, 'deepwoods'); category.offerGolden(e, n, fact); return; }
+      wikidata.judge(category.wd, answer).then((v) => {
+        if (!v?.valid || !Number.isFinite(v.sl) || signal.aborted) return;
+        const e = category.match(v.canonical || answer, { typo: false })?.entry || category.add(`${cleanText(v.canonical || answer, 80)}|${answer}`, 'deepwoods');
+        if (e && e.tier !== 'kindling' && e.tier !== 'trailhead') category.offerGolden(e, v.sl + 0.5, fact);
+      }).catch(() => {});
+    };
+    const settleNiche = (mode) => {
+      if (nicheMode) return;
+      nicheMode = mode;
+      category.goldenScale = mode === 'verify' ? 'sl' : 'pct';
+      for (const c of nicheQueue.splice(0)) offerNiche(...c);
     };
 
     // Wikidata in parallel: from the raw prompt now, or from Claude's LOOKUP hint if that fails
-    let wdJob = wikidata.generate(prompt, { into: category, onProgress: () => { category.sources.add('wikidata'); progress(); } });
+    const wdOpts = () => ({ into: category, goldenOwner: true, onProgress: () => { category.sources.add('wikidata'); progress(); } });
+    let wdJob = wikidata.generate(prompt, wdOpts());
     let hint = null;
     const wdTried = wdJob.ready.then(() => true, () => false);
+    wdTried.then((ok) => { if (ok) settleNiche('verify'); });
     tasks.push(wdJob.done.catch(() => {}));
     const tryHint = () => wdTried.then((ok) => {
-      if (ok || !hint || hint === 'none' || signal.aborted) return;
-      wdJob = wikidata.generate(prompt, { into: category, hint, onProgress: () => { category.sources.add('wikidata'); progress(); } });
+      if (ok) return;
+      if (!hint || hint === 'none' || signal.aborted) { settleNiche('pct'); return; }
+      wdJob = wikidata.generate(prompt, { ...wdOpts(), hint });
+      wdJob.ready.then(() => settleNiche('verify'), () => settleNiche('pct'));
       return wdJob.done.catch(() => {});
     });
 
@@ -226,6 +257,7 @@ class AIGen {
     };
 
     const runSlice = (instr, maxTokens) => this._streamLines(instr, maxTokens, (line) => {
+      if (line === 'NONE' || /^NONE\b/i.test(line)) return;
       if (line === 'NONE') return;
       const parts = line.split('|').map((s) => s.trim());
       const tag = parts[0].toUpperCase().replace(/[^A-Z]/g, '');
@@ -234,7 +266,7 @@ class AIGen {
       const rest = parts.slice(1).filter(Boolean).join('|');
       if (tier && rest && rest.length < 120) category.add(rest, tier === 'kindling' ? 'trailhead' : tier);
       progress();
-    }, signal);
+    }, signal, false, SLICE_MODEL);
 
     const core = this._streamLines(coreInstr(prompt), 2200, (line) => {
       const m = /^(PROMPT|REJECT|SIZE|LOOKUP|NICHEST|K|T)\s*:\s*(.+)$/i.exec(line.replace(/^[-*•\s]+/, ''));
@@ -265,6 +297,7 @@ class AIGen {
     const done = (async () => {
       await core.catch(() => {});
       await waitAll();
+      if (!nicheMode) settleNiche(category.wd ? 'verify' : 'pct');
       if (rejectReason) throw new Error(rejectReason);
       if (category.size < 4) throw new Error('Not enough answers for that category.');
       progress(true);
@@ -318,7 +351,7 @@ class AIGen {
       messages: [{
         role: 'user',
         content: `Party game referee. Category: "${prompt}". A player answered: "${cleanText(answer, 60)}".
-Is this a genuinely correct answer for the category (allow misspellings and common alternate names)? If valid, give its canonical name, how readily people think of it — kindling (almost everyone), trailhead (common), backcountry (fans/enthusiasts), deepwoods (obscure) — and known_pct: the estimated % of people who'd recognise it.`,
+Is this a genuinely correct answer for the category (allow misspellings, singular/plural, short forms, nicknames and common alternate names; reject near-misses and things that only relate to the category)? If valid, give its canonical name, how readily people think of it — kindling (almost everyone), trailhead (common), backcountry (fans/enthusiasts), deepwoods (obscure) — and known_pct: the estimated % of people who'd recognise it.`,
       }],
     }), { signal: AbortSignal.timeout(7000) });
     if (msg.stop_reason === 'refusal') return { valid: false };

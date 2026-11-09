@@ -60,6 +60,7 @@ function connect() {
   socket.on('ev', (ev) => app.game?.handleEvent(ev));
   socket.on('typing', (d) => app.game?.onTyping(d));
   socket.on('genprogress', (d) => app.game?.onGenProgress(d));
+  socket.on('hint', (d) => app.game?.onHint(d));
   socket.on('chat', (m) => addChat(m, true));
   socket.on('chat:history', (list) => { $('#chat-list').innerHTML = ''; list.forEach((m) => addChat(m, false)); });
   socket.on('profile', (p) => { app.me = p; renderProfile(); });
@@ -196,8 +197,11 @@ function addChat(m, live) {
 }
 function chatColor(m) {
   const b = app.catalog?.cosmetics?.banner?.find((x) => x.id === m.banner);
-  if (!b || !b.color.startsWith('#') || b.id === 'birch') return '#7b3f12';
-  return b.color;
+  if (!b) return 'var(--amber)';
+  if (b.color === 'gold') return 'var(--gold)';
+  if (!b.color.startsWith('#')) return '#9fd8ff';
+  // lift dark banner colours so names stay readable on the dark radio
+  return `color-mix(in srgb, ${b.color} 62%, #ffffff)`;
 }
 
 // ---------------------------------------------------------------- lobby
@@ -271,8 +275,9 @@ function sendSettings(patch) {
   app.socket.emit('room:settings', { settings: patch });
 }
 
-function stepper(key, val, min, max, step, suffix, disabled) {
-  return `<span class="stepper"><button data-step="${key}" data-d="${-step}" data-min="${min}" data-max="${max}" ${disabled ? 'disabled' : ''}>−</button><b>${val}${suffix}</b><button data-step="${key}" data-d="${step}" data-min="${min}" data-max="${max}" ${disabled ? 'disabled' : ''}>+</button></span>`;
+function stepper(key, val, min, max, step, suffix, disabled, zeroLabel) {
+  const shown = zeroLabel && Number(val) === 0 ? zeroLabel : `${val}${suffix}`;
+  return `<span class="stepper"><button data-step="${key}" data-d="${-step}" data-min="${min}" data-max="${max}" ${disabled ? 'disabled' : ''} aria-label="less">−</button><b>${shown}</b><button data-step="${key}" data-d="${step}" data-min="${min}" data-max="${max}" ${disabled ? 'disabled' : ''} aria-label="more">+</button></span>`;
 }
 function toggle(key, on, disabled) { return `<button class="toggle ${on ? 'on' : ''}" data-toggle="${key}" ${disabled ? 'disabled' : ''} aria-pressed="${on}"></button>`; }
 
@@ -280,27 +285,27 @@ function renderSettings(isHost) {
   const s = app.room.settings;
   const cat = app.catalog;
   const dis = !isHost || app.room.quick;
-  const modes = Object.entries(cat.modes).map(([id, m]) => `<button class="mode-card ${s.mode === id ? 'sel' : ''}" data-mode="${id}" ${dis ? 'disabled' : ''}><b>${m.icon} ${esc(m.name)}</b><small>${esc(m.desc)}</small></button>`).join('');
+  const modes = Object.entries(cat.modes).map(([id, m]) => `<button class="mode-card ${s.mode === id ? 'sel' : ''}" data-mode="${id}" ${dis ? 'disabled' : ''} title="${esc(m.desc)}"><span class="mi">${m.icon}</span><b>${esc(m.name)}</b></button>`).join('');
   const gimmicks = Object.entries(cat.gimmicks).map(([id, g]) => `<button class="${s.gimmick === id ? 'sel' : ''}" data-gimmick="${id}" ${dis ? 'disabled' : ''}>${g.icon} ${esc(g.name)}</button>`).join('');
   const sources = Object.entries(cat.sources).map(([id, g]) => `<button class="${s.source === id ? 'sel' : ''}" data-source="${id}" ${dis ? 'disabled' : ''} title="${esc(g.desc)}">${esc(g.name)}</button>`).join('');
   const pack = app.room.customPack;
   const ai = app.status?.ai?.enabled;
+  const rg = cat.ranges || { pickSec: [15, 90, 5], genTrailMax: [0, 40, 2], trailMax: [0, 40, 2] };
   $('#lobby-settings').innerHTML = `
-    <div class="nail tl"></div><div class="nail tr"></div>
-    <h3>🗺️ Trail Rules ${app.room.quick ? '<small class="muted">(ranked rules are fixed)</small>' : isHost ? '' : '<small class="muted">(set by the counselor)</small>'}</h3>
+    <h3 class="panel-title">🗺️ Trail rules ${app.room.quick ? '<span>ranked rules are fixed</span>' : isHost ? '' : '<span>set by the counselor</span>'}</h3>
     <div class="settings-grid">
-      <div class="set-group"><h4>Game mode</h4><div class="mode-cards">${modes}</div></div>
+      <div class="set-group"><h4>Game mode</h4><div class="mode-cards">${modes}</div><p class="set-desc">${esc(cat.modes[s.mode].desc)}</p></div>
       ${s.mode === 'duel' ? `<div class="set-group duel-box"><h4>⚔️ Duel trail</h4>
-        <p class="muted" style="margin:0 0 6px;font-size:.82rem">One question bank for the whole duel. Type any category (it's scouted on the fly) or leave it random. Hike the entire bank and it's a tie!</p>
+        <p class="set-desc" style="margin:0 0 8px">One question bank for the whole duel. Type any category (it's scouted on the fly) or leave it random. Hike the entire bank and it's a tie!</p>
         <form class="fg-row" id="duel-form"><input id="duel-trail" maxlength="90" placeholder="Random Krillion daily — or type e.g. Name a dinosaur" value="${esc(s.duelTrail || '')}" ${dis ? 'disabled' : ''}>
         ${dis ? '' : '<button class="btn btn-small btn-fire" type="submit">Set</button><button class="btn btn-small btn-ghost" type="button" id="duel-random">🎲 Random</button>'}</form>
         <div class="pack-line">${s.duelTrail ? `Dueling on: <b>${esc(s.duelTrail)}</b>` : '🎲 A random Krillion daily (small enough to finish)'}</div></div>` : ''}
       <div class="set-group" ${s.mode === 'duel' ? 'style="display:none"' : ''}><h4>Gimmick</h4><div class="seg">${gimmicks}</div>
-        <div class="muted" style="margin-top:6px;font-size:.82rem">${esc(cat.gimmicks[s.gimmick].desc)}</div>
+        <div class="set-desc">${esc(cat.gimmicks[s.gimmick].desc)}</div>
         ${s.gimmick !== 'none' ? `<div class="set-row"><label>Special round every<small>poofs between special rounds</small></label>${stepper('specialEvery', s.specialEvery, 2, 6, 1, ' rounds', dis)}</div>` : ''}
       </div>
       <div class="set-group"><h4>Question bank</h4><div class="seg">${sources}</div>
-        <div class="muted" style="margin-top:6px;font-size:.82rem">${esc(cat.sources[s.source].desc)}</div>
+        <div class="set-desc">${esc(cat.sources[s.source].desc)}</div>
         ${s.source === 'custom' ? `<div class="pack-line">${pack ? `📒 <b>${esc(pack.name)}</b> · ${pack.count} categories` : '⚠️ No field guide chosen yet.'}
           ${!dis ? '<button class="btn btn-small btn-moss" id="btn-pick-pack">Choose / build field guide</button>' : ''}</div>` : ''}
       </div>
@@ -314,7 +319,19 @@ function renderSettings(isHost) {
         <div class="set-row"><label>Ranger judge<small>live-checks answers missing from generated lists (Wikidata${ai ? ' + AI' : ''}) — a nicher find can steal the Golden Antler</small></label>${toggle('aiJudge', s.aiJudge, dis)}</div>
         ${!app.room.quick ? `<div class="set-row"><label>Public campfire<small>list on the trailhead board</small></label>${toggle('isPublic', s.isPublic, dis)}</div>` : ''}
       </div>
+      <details class="set-group more-rules" ${app.moreRulesOpen ? 'open' : ''}><summary><h4>⚙️ More campsite rules</h4></summary>
+        ${s.gimmick === 'leaderpick' ? `<div class="set-row"><label>Leader's Pick time<small>seconds to carve a custom category</small></label>${stepper('pickSec', s.pickSec, rg.pickSec[0], rg.pickSec[1], rg.pickSec[2], 's', dis)}</div>` : ''}
+        <div class="set-row"><label>Custom-trail length<small>Leader's Pick, Echo and generated categories move on after this many answers</small></label>${stepper('genTrailMax', s.genTrailMax, rg.genTrailMax[0], rg.genTrailMax[1], rg.genTrailMax[2], '', dis, '∞')}</div>
+        <div class="set-row"><label>Every-trail length<small>move on from ANY category after this many answers</small></label>${stepper('trailMax', s.trailMax, rg.trailMax[0], rg.trailMax[1], rg.trailMax[2], '', dis, '∞')}</div>
+        <div class="set-row"><label>Easiest tier that counts<small>Auto follows the game mode</small></label><span class="seg">${[['auto', 'Auto'], ['kindling', '🪵 All'], ['trailhead', '🥾 No Kindling'], ['backcountry', '🏕️ Backcountry+']].map(([v, l]) => `<button class="${s.tierFloor === v ? 'sel' : ''}" data-floor="${v}" ${dis ? 'disabled' : ''}>${l}</button>`).join('')}</span></div>
+        <div class="set-row"><label>Moose path<small>where the moose runs after a good answer</small></label><span class="seg">${[['clockwise', '🔁 Clockwise'], ['random', '🎲 Random']].map(([v, l]) => `<button class="${s.moosePath === v ? 'sel' : ''}" data-path="${v}" ${dis ? 'disabled' : ''}>${l}</button>`).join('')}</span></div>
+        <div class="set-row"><label>Golden Antler heals<small>finding the Golden Antler restores a lost life</small></label>${toggle('goldenLife', s.goldenLife, dis)}</div>
+        <div class="set-row"><label>Live autocorrect preview<small>the holder sees ✓ / ✨ / 🧭 as they type</small></label>${toggle('liveHints', s.liveHints, dis)}</div>
+        <div class="set-row"><label>Show live typing<small>off = others only see •••</small></label>${toggle('showTyping', s.showTyping, dis)}</div>
+        <div class="set-row"><label>Reveal leftovers<small>show unfound answers (and the Golden Antler) after a poof</small></label>${toggle('revealLeftovers', s.revealLeftovers, dis)}</div>
+      </details>
     </div>`;
+  $('.more-rules', $('#lobby-settings'))?.addEventListener('toggle', (e) => { app.moreRulesOpen = e.target.open; });
   if (dis) return;
   const root = $('#lobby-settings');
   $$('[data-mode]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ mode: b.dataset.mode })));
@@ -329,6 +346,8 @@ function renderSettings(isHost) {
     sendSettings({ [k]: v });
   }));
   $$('[data-typo]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ typoTolerance: b.dataset.typo })));
+  $$('[data-floor]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ tierFloor: b.dataset.floor })));
+  $$('[data-path]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ moosePath: b.dataset.path })));
   $$('[data-toggle]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ [b.dataset.toggle]: !s[b.dataset.toggle] })));
   $('#btn-pick-pack', root)?.addEventListener('click', () => { sfx.click(); openFieldGuide({ forRoom: true }); });
   const duelForm = $('#duel-form', root);
@@ -340,6 +359,7 @@ function renderSettings(isHost) {
 
 // ---------------------------------------------------------------- wire up
 function bind() {
+  document.addEventListener('submit', (e) => e.preventDefault(), true);
   $('#name-input').addEventListener('input', onNameInput);
   $('#btn-quick').addEventListener('click', () => {
     sfx.click();

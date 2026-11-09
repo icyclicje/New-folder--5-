@@ -48,7 +48,16 @@ export function bannerStyle(bannerId, catalog) {
   const b = catalog?.cosmetics?.banner?.find((x) => x.id === bannerId);
   if (!b) return { cls: '', style: '' };
   if (['aurora', 'starry', 'gold'].includes(b.color)) return { cls: 'banner-' + b.color, style: '' };
-  return { cls: '', style: `--banner:${b.color}` };
+  return { cls: isLight(b.color) ? 'banner-light' : '', style: `--banner:${b.color}` };
+}
+
+/** Is a #rrggbb colour light enough to need dark text on it? */
+export function isLight(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b > 165;
 }
 
 export function fmtMs(ms) {

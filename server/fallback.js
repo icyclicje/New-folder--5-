@@ -71,7 +71,8 @@ function findSamePrompt(query, candidates) {
     const sim = inter / (q.size + t.size - inter || 1);
     if (sim > bestSim) { bestSim = sim; best = c; }
   }
-  return bestSim >= 0.6 ? best : null;
+  // strict: "Name a Pixar movie" must not become "Name a Disney or Pixar movie"
+  return bestSim >= 0.75 ? best : null;
 }
 
 /** Build a "Name something linked to X" board from word associations. */

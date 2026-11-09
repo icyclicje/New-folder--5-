@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Mivimoose Party</title>
   <meta name="description" content="A fast-paced campfire elimination word game for 2–8 campers. Pass the inflating moose by naming answers before it poofs!">
-  <meta name="theme-color" content="#0b1a2e">
+  <meta name="theme-color" content="#08151b">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A6%8C%3C/text%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&family=Nunito:wght@500;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -17,11 +17,11 @@
   <div id="fireflies" class="fireflies" aria-hidden="true"></div>
 
   <header class="topbar">
-    <button class="brand" id="brand-home" title="Back to the trailhead">🦌 <span>Mivimoose Party</span></button>
+    <button class="brand" id="brand-home" title="Back to the trailhead"><span class="brand-mark" aria-hidden="true">🦌</span><span class="brand-name">Mivimoose Party</span></button>
     <div class="topbar-right">
       <button class="chip-btn" id="btn-profile-chip" title="Trading Post"></button>
-      <button class="icon-btn" id="btn-ambient" title="Toggle campfire ambience">🦗</button>
-      <button class="icon-btn" id="btn-mute" title="Mute sounds">🔊</button>
+      <button class="icon-btn" id="btn-ambient" title="Toggle campfire ambience" aria-label="Toggle campfire ambience">🦗</button>
+      <button class="icon-btn" id="btn-mute" title="Mute sounds" aria-label="Mute sounds">🔊</button>
     </div>
   </header>
 
@@ -29,18 +29,35 @@
     <!-- ================= HOME ================= -->
     <section id="screen-home" class="screen active">
       <div class="hero">
-        <div class="hero-moose" id="hero-moose"></div>
-        <div class="title-sign">
-          <div class="rope l"></div><div class="rope r"></div>
-          <h1>Mivimoose<br><span>Party</span></h1>
-          <p class="tagline">Pass the puffing moose around the campfire — name it before it goes <b>POOF!</b></p>
+        <div class="hero-copy">
+          <span class="eyebrow">🔥 Campfire word party · 2–8 campers</span>
+          <h1>Mivimoose <span>Party</span></h1>
+          <p class="tagline">Pass the puffing moose around the fire. Name something on the trail sign before it goes <b>POOF!</b></p>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="hero-glow"></div>
+          <div class="hero-moose" id="hero-moose"></div>
         </div>
       </div>
 
       <div class="home-grid">
+        <div class="panel play-panel">
+          <h3 class="panel-title">Play</h3>
+          <button class="action action-fire" id="btn-quick"><span class="a-icon">🥾</span><span class="a-text"><b>Quick Trek</b><small>Ranked · up to 8 campers · Krillion dailies</small></span><span class="a-go" aria-hidden="true">›</span></button>
+          <button class="action action-moss" id="btn-duel"><span class="a-icon">⚔️</span><span class="a-text"><b>Quick 1v1 Duel</b><small>Ranked · one question bank · clear it all and it's a tie</small></span><span class="a-go" aria-hidden="true">›</span></button>
+          <button class="action" id="btn-create"><span class="a-icon">⛺</span><span class="a-text"><b>Pitch a Campsite</b><small>Custom game · your rules · room code</small></span><span class="a-go" aria-hidden="true">›</span></button>
+          <div class="join-row">
+            <input id="join-code" maxlength="4" autocomplete="off" spellcheck="false" placeholder="CODE" aria-label="Campsite code">
+            <button class="btn btn-wood" id="btn-join">Hike in</button>
+          </div>
+          <div class="public-rooms">
+            <h4>🔥 Open campfires</h4>
+            <ul id="public-rooms"><li class="muted">Looking for smoke on the horizon…</li></ul>
+          </div>
+        </div>
+
         <div class="panel name-panel">
-          <div class="nail tl"></div><div class="nail tr"></div>
-          <h3>Your Camper</h3>
+          <h3 class="panel-title">Your camper</h3>
           <button class="avatar-big" id="home-avatar" title="Visit the Trading Post"></button>
           <label class="field">
             <span>Trail name</span>
@@ -50,26 +67,11 @@
           <button class="btn btn-moss" id="btn-trading-post">🛶 Trading Post</button>
         </div>
 
-        <div class="panel play-panel">
-          <div class="nail tl"></div><div class="nail tr"></div>
-          <button class="btn btn-big btn-fire" id="btn-quick">🥾 Quick Trek <small>Ranked · 8-camper party · Krillion dailies</small></button>
-          <button class="btn btn-big btn-moss" id="btn-duel">⚔️ Quick 1v1 Duel <small>Ranked · one question bank · clear it all and it's a tie</small></button>
-          <button class="btn btn-big btn-wood" id="btn-create">⛺ Pitch a Campsite <small>Custom game · your rules · room code</small></button>
-          <div class="join-row">
-            <input id="join-code" maxlength="4" autocomplete="off" spellcheck="false" placeholder="CODE" aria-label="Campsite code">
-            <button class="btn btn-wood" id="btn-join">Hike In 🥾</button>
-          </div>
-          <div class="public-rooms">
-            <h4>🔥 Open campfires</h4>
-            <ul id="public-rooms"><li class="muted">Looking for smoke on the horizon…</li></ul>
-          </div>
-        </div>
-
         <div class="panel side-panel">
-          <div class="nail tl"></div><div class="nail tr"></div>
-          <button class="btn btn-wood" id="btn-guide">📒 My Field Guide <small>Custom questions · AI topic banks</small></button>
-          <button class="btn btn-wood" id="btn-leaderboard">🏆 Lodge Leaderboard</button>
-          <button class="btn btn-wood" id="btn-howto">🧭 How to Play</button>
+          <h3 class="panel-title">Around camp</h3>
+          <button class="list-btn" id="btn-guide"><span class="a-icon">📒</span><span class="a-text"><b>My Field Guide</b><small>Custom questions · AI topic banks</small></span></button>
+          <button class="list-btn" id="btn-leaderboard"><span class="a-icon">🏆</span><span class="a-text"><b>Lodge Leaderboard</b><small>Top ranked campers</small></span></button>
+          <button class="list-btn" id="btn-howto"><span class="a-icon">🧭</span><span class="a-text"><b>How to Play</b><small>Tiers, modes and gimmicks</small></span></button>
           <div class="trail-status" id="trail-status">Unrolling the trail map…</div>
         </div>
       </div>
@@ -85,22 +87,24 @@
         <div class="code-box">
           <span>Trail code</span>
           <b id="lobby-code">····</b>
-          <button class="btn btn-small btn-wood" id="btn-copy-code" title="Copy code">📋</button>
+          <button class="btn btn-small btn-wood" id="btn-copy-code" title="Copy code" aria-label="Copy code">📋</button>
           <button class="btn btn-small btn-wood" id="btn-copy-link" title="Copy invite link">🔗 Invite</button>
         </div>
-        <button class="btn btn-ghost" id="btn-leave-lobby">🎒 Pack Up</button>
+        <button class="btn btn-ghost" id="btn-leave-lobby">🎒 Pack up</button>
       </div>
       <div class="lobby-grid">
         <div class="panel lobby-players">
-          <h3>Campers <span id="lobby-count"></span></h3>
+          <h3 class="panel-title">Campers <span id="lobby-count"></span></h3>
           <div class="mini-camp" id="mini-camp"></div>
           <ul id="lobby-player-list" class="player-list"></ul>
           <div class="bot-row" id="bot-row">
-            <span>Invite a critter bot:</span>
-            <button class="btn btn-small btn-moss" data-bot="cub">🐾 Cub</button>
-            <button class="btn btn-small btn-moss" data-bot="ranger">🐾 Ranger</button>
-            <button class="btn btn-small btn-moss" data-bot="legend">🐾 Legend</button>
-            <button class="btn btn-small btn-ghost" data-bot="remove">Shoo one</button>
+            <span>Invite a critter bot</span>
+            <div class="bot-btns">
+              <button class="btn btn-small btn-wood" data-bot="cub">🐾 Cub</button>
+              <button class="btn btn-small btn-wood" data-bot="ranger">🐾 Ranger</button>
+              <button class="btn btn-small btn-wood" data-bot="legend">🐾 Legend</button>
+              <button class="btn btn-small btn-ghost" data-bot="remove">Shoo one</button>
+            </div>
           </div>
         </div>
         <div class="panel lobby-settings" id="lobby-settings"></div>
@@ -108,7 +112,7 @@
       </div>
       <div class="lobby-foot">
         <div id="lobby-status" class="lobby-status"></div>
-        <button class="btn btn-big btn-fire" id="btn-start">🔥 Light the Fire!</button>
+        <button class="btn btn-big btn-fire" id="btn-start">🔥 Light the fire</button>
       </div>
     </section>
 
@@ -117,7 +121,6 @@
       <div class="game-wrap">
         <div class="stage" id="stage">
           <div class="trail-sign" id="trail-sign">
-            <div class="rope l"></div><div class="rope r"></div>
             <div class="sign-board">
               <div class="sign-src" id="cat-src"></div>
               <div class="sign-prompt" id="cat-prompt">Gathering firewood…</div>
@@ -139,14 +142,17 @@
           <div class="stage-overlay" id="stage-overlay"></div>
           <div class="answer-bar" id="answer-bar">
             <div class="me-status" id="me-status"></div>
-            <form id="answer-form" autocomplete="off">
-              <input id="answer-input" maxlength="48" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Pre-type your answer… the moose is coming">
-              <button class="btn btn-fire" type="submit" id="answer-send">Toss it! ⏎</button>
-            </form>
+            <div class="answer-wrap">
+              <div class="answer-hint" id="answer-hint" aria-live="polite"></div>
+              <form id="answer-form" autocomplete="off">
+                <input id="answer-input" maxlength="48" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Pre-type your answer… the moose is coming">
+                <button class="btn btn-fire" type="submit" id="answer-send">Toss it ⏎</button>
+              </form>
+            </div>
           </div>
         </div>
         <aside class="sidebar" id="sidebar">
-          <button class="sidebar-toggle" id="sidebar-toggle">📻 Radio</button>
+          <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Close radio">📻 Radio</button>
           <div class="tabs">
             <button class="tab active" data-tab="chat">📻 Ranger Radio</button>
             <button class="tab" data-tab="log">🗺️ Trail Log</button>

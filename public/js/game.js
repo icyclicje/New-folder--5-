@@ -56,7 +56,7 @@ export class GameView {
   bind() {
     this.bound = true;
     const input = $('#answer-input');
-    input.addEventListener('input', () => this.sendTyping());
+    input.addEventListener('input', () => { this.sendTyping(); if (!input.value.trim()) this.setHint(null); });
     $('#answer-form').addEventListener('submit', (e) => { e.preventDefault(); this.submit(); });
     $$('.sidebar .tab').forEach((t) => t.addEventListener('click', () => {
       sfx.click();
@@ -71,8 +71,40 @@ export class GameView {
       const t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       if ($('#modal-root').children.length) return;
-      if (e.key.length === 1 || e.key === 'Backspace') input.focus();
+      if (e.key.length === 1 || e.key === 'Backspace') this.focusAnswer();
     });
+  }
+
+  focusAnswer() {
+    const inp = $('#answer-input');
+    if (document.activeElement !== inp) inp.focus({ preventScroll: true });
+    const n = inp.value.length;
+    try { if (inp.selectionStart === 0 && inp.selectionEnd === 0 && n) inp.setSelectionRange(n, n); } catch { /* ignore */ }
+  }
+
+  /** Live autocorrect / ranger preview under the answer box (holder only). */
+  onHint(h) {
+    if (!this.isMyTurn()) return this.setHint(null);
+    const cur = $('#answer-input').value.trim().toLowerCase();
+    if (!h || h.status === 'none' || (h.text && h.text.trim().toLowerCase() !== cur)) return this.setHint(null);
+    this.setHint(h);
+  }
+
+  setHint(h) {
+    const el = $('#answer-hint');
+    if (!el) return;
+    if (!h) { el.className = 'answer-hint'; el.innerHTML = ''; return; }
+    const txt = {
+      match: () => `✓ <b>${esc(h.answer)}</b>`,
+      fuzzy: () => `✨ Autocorrect → <b>${esc(h.answer)}</b>`,
+      verified: () => `🧭 Ranger verified <b>${esc(h.answer)}</b>`,
+      checking: () => '🧭 Ranger checking…',
+      taken: () => `🚫 <b>${esc(h.answer)}</b> already hiked${h.by ? ' by ' + esc(h.by) : ''}`,
+      banned: () => `🪵 <b>${esc(h.answer)}</b> is ${TIER_NAME[h.tier] || 'too common'} — banned here`,
+    }[h.status];
+    if (!txt) return this.setHint(null);
+    el.className = 'answer-hint show ' + h.status;
+    el.innerHTML = txt();
   }
 
   isMyTurn() {
@@ -103,6 +135,7 @@ export class GameView {
       return;
     }
     if (g.stage === 'judging') return;
+    this.lastSubmitted = text;
     this.app.socket.emit('submit', { text });
   }
 
@@ -135,7 +168,11 @@ export class GameView {
     bar.classList.toggle('wait', !mine);
     const meP = s.players.find((p) => p.id === this.me);
     bar.classList.toggle('spectating', !meP || meP.spectator || (!meP.alive && g.stage !== 'over'));
-    $('#answer-input').placeholder = !meP || meP.spectator ? '👀 Watching from the treeline — you\'ll join next game' : !meP.alive ? '👻 Out of the woods — cheer from the ghost log!' : mine ? '🔥 YOUR TURN — type an answer and hit Enter!' : 'Pre-type your answer… the moose is coming';
+    const narrow = innerWidth < 520;
+    $('#answer-input').placeholder = !meP || meP.spectator ? (narrow ? '👀 Watching — join next game' : '👀 Watching from the treeline — you\'ll join next game')
+      : !meP.alive ? (narrow ? '👻 Out — cheer them on!' : '👻 Out of the woods — cheer from the ghost log!')
+      : mine ? (narrow ? '🔥 Your turn — type & Enter!' : '🔥 YOUR TURN — type an answer and hit Enter!')
+      : (narrow ? 'Pre-type your answer…' : 'Pre-type your answer… the moose is coming');
   }
 
   layout(s) {
@@ -147,7 +184,7 @@ export class GameView {
     order.forEach((pid, i) => {
       const a = Math.PI / 2 + ((i - myIdx) * 2 * Math.PI) / N;
       const narrow = innerWidth < 820;
-      pos.set(pid, { x: 50 + (narrow ? 37 : 40) * Math.cos(a), y: 50 + (narrow ? 30 : 31) * Math.sin(a) });
+      pos.set(pid, { x: 50 + (narrow ? 37 : 40) * Math.cos(a), y: 52 + (narrow ? 29 : 30) * Math.sin(a) });
     });
     return pos;
   }
@@ -164,7 +201,7 @@ export class GameView {
       this.positions = this.layout(s);
       for (const pid of g.order) {
         const el = document.createElement('div');
-        el.className = 'seat';
+        el.className = 'seat' + (pid === this.me ? ' mine' : '');
         el.dataset.pid = pid;
         el.innerHTML = `<div class="bubble last hidden"></div><div class="bubble typing hidden"></div>
           <div class="stump"><svg class="ring hidden" viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="44"/><circle class="fg" cx="50" cy="50" r="44" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"/></svg>
@@ -233,7 +270,7 @@ export class GameView {
       sign.classList.remove('swing'); void sign.offsetWidth; sign.classList.add('swing');
     }
     $('#cat-src').innerHTML = `${esc(c.sourceLabel || c.source)}${c.total ? ` · <b class="count-tick">${c.total.toLocaleString()}</b> answers across 5 tiers` : ''}${c.complete === false ? ' · <span class="scouting"><span class="spin">🧭</span> ranger still scouting deeper…</span>' : ''}`;
-    const minIdx = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'].indexOf(mode.minTier || 'kindling');
+    const minIdx = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'].indexOf(g.minTier || mode.minTier || 'kindling');
     $('#tier-chips').innerHTML = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'].map((t, i) =>
       `<span class="tier-chip ${i < minIdx ? 'banned' : ''}" style="--tc:${tierVar(t)}" title="${TIER_NAME[t]}">${TIER_ICON[t]} ${TIER_NAME[t]} ${c.counts?.[t] ?? 0}</span>`).join('');
   }
@@ -251,7 +288,7 @@ export class GameView {
     }
     if (g.ranked) html += '<span class="pill">🏅 <b>Ranked</b></span>';
     if (g.duel) html += `<span class="pill duel-pill">⚔️ One-bank duel · <b>${g.remaining ?? '?'}</b> answers left${g.category?.complete === false ? ' (+ still scouting)' : ''} — clear it and it's a tie</span>`;
-    else html += `<span class="pill">🗺️ <b>${g.used}</b> answers hiked</span>`;
+    else html += `<span class="pill">🗺️ <b>${g.used}</b> answers hiked${g.trailLeft != null ? ` · new trail in <b>${g.trailLeft}</b>` : ''}</span>`;
     html += '<button class="pill hud-radio" data-radio>📻 Radio & Trail Log</button>';
     $('#hud').innerHTML = html;
   }
@@ -285,12 +322,14 @@ export class GameView {
   // ------------------------------------------------------------ overlays
   showOverlay(key, html) {
     const ov = $('#stage-overlay');
+    let fresh = false;
     if (this.overlayKey !== key) {
       this.overlayKey = key;
       ov.innerHTML = `<div class="overlay-card panel">${html}</div>`;
+      fresh = true;
     }
     ov.classList.add('show');
-    return ov;
+    return { ov, fresh };
   }
   hideOverlay() { this.overlayKey = ''; const ov = $('#stage-overlay'); ov.classList.remove('show'); ov.innerHTML = ''; }
 
@@ -304,13 +343,12 @@ export class GameView {
     if (g.stage === 'picking' && g.special) {
       const leader = byId.get(g.special.leaderId);
       if (g.special.leaderId === this.me) {
-        const ov = this.showOverlay('pick-me', `<div class="big">🪓 You're leading the pack!</div>
-          <p class="muted">Carve the next category onto the trail sign. The ranger generates answers on the fly.</p>
+        const { fresh } = this.showOverlay('pick-me-' + (this.pickRound = g.round), `<div class="big">🪓 You have the most lives!</div>
+          <p class="muted">Carve the next category onto the trail sign — the ranger scouts answers on the fly.</p>
           <form id="pick-form" class="fg-row"><input id="pick-input" maxlength="90" placeholder="e.g. Name a pizza topping" autocomplete="off"><button class="btn btn-fire" type="submit">Carve it 🪓</button></form>
           <div class="suggest-chips" id="pick-sugg"></div>
           <div class="timer-bar"><i id="pick-timer"></i></div>`);
-        if (!ov.dataset.bound) {
-          ov.dataset.bound = '1';
+        if (fresh) {
           const inp = $('#pick-input');
           setTimeout(() => inp.focus(), 50);
           const chips = (list) => {
@@ -319,6 +357,8 @@ export class GameView {
           };
           chips(g.special.suggestions || []);
           let st = null;
+          const send = (text) => { if (text.trim().length >= 3) { sfx.chop(); this.app.socket.emit('leader:pick', { text: text.trim() }); } };
+          inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); send(inp.value); } });
           inp.addEventListener('input', () => {
             this.app.socket.emit('typing', { text: inp.value });
             clearTimeout(st);
@@ -327,26 +367,26 @@ export class GameView {
               this.app.socket.emit('suggest', { q: inp.value }, (list) => chips((list || []).map((x) => x.prompt).slice(0, 6)));
             }, 220);
           });
-          $('#pick-form').addEventListener('submit', (e) => { e.preventDefault(); if (inp.value.trim().length >= 3) { sfx.chop(); this.app.socket.emit('leader:pick', { text: inp.value.trim() }); } });
+          $('#pick-form').addEventListener('submit', (e) => { e.preventDefault(); send(inp.value); });
         }
         this.pickDeadline = performance.now() + (g.special.remainingMs || 0);
-        this.pickTotal = 20000;
+        this.pickTotal = g.special.totalMs || 40000;
       } else {
         this.showOverlay('pick-' + g.special.leaderId, `<div class="big">🪓 ${esc(leader?.name || 'The leader')} is carving the next trail sign…</div>
           <div class="carving" id="carving"><span id="carving-text"></span><span class="caret"></span></div>
           <div class="timer-bar"><i id="pick-timer"></i></div><p class="muted">Leader's Pick — the camper in the lead names the category!</p>`);
         this.pickDeadline = performance.now() + (g.special.remainingMs || 0);
-        this.pickTotal = 20000;
+        this.pickTotal = g.special.totalMs || 40000;
       }
       return;
     }
     if (g.stage === 'generating' && g.special) {
-      const ov = this.showOverlay('gen-' + (g.special.generating || ''), `<div class="compass">🧭</div>
+      const { ov } = this.showOverlay('gen-' + (g.special.generating || ''), `<div class="compass">🧭</div>
         <div class="big">${g.special.type === 'echotrail' ? `📣 “${esc(g.special.from || '')}” echoes…` : '🌲 Scouting the trail…'}</div>
         <p class="muted" id="gen-prompt">${esc(g.special.generating || '')}</p>
         <div class="gen-count" id="gen-count">0</div><div class="muted">answers found — the round starts the moment there are enough</div>
         <div class="gen-tiers" id="gen-tiers"></div><div class="muted gen-meta" id="gen-meta"></div>`);
-      if (this.genInfo) this.onGenProgress(this.genInfo);
+      this.onGenProgress(this.genInfo || { count: 0, counts: {} }); // draw the (empty) tier columns right away
       return ov;
     }
     this.hideOverlay();
@@ -394,23 +434,34 @@ export class GameView {
 
   seatPos(pid) { return this.positions?.get(pid); }
 
+  /** The moose stands BESIDE the active stump (inner side), facing its camper — never on top of them. */
   moveMooseTo(pid) {
     const p = this.seatPos(pid);
     if (!p) return;
-    const tx = 50 + (p.x - 50) * 0.6;
-    const ty = 50 + (p.y - 50) * 0.6;
-    this.placeMoose(tx, ty);
+    const arena = $('#arena');
+    const seatEl = this.seatEls.get(pid);
+    const aw = arena?.clientWidth || 1000, ah = arena?.clientHeight || 600;
+    const seatW = seatEl?.offsetWidth || 100;
+    const mooseW = $('#moose')?.offsetWidth || 120;
+    const side = Math.abs(p.x - 50) < 3 ? (p.y > 50 ? -1 : 1) : p.x < 50 ? 1 : -1;
+    const dx = ((seatW * 0.5 + mooseW * 0.5) / aw) * 100;
+    const tx = Math.max(7, Math.min(93, p.x + side * dx));
+    const ty = Math.max(30, Math.min(92, p.y + (seatW * 0.42 / ah) * 100));
+    this.placeMoose(tx, ty, side > 0 ? 'left' : 'right');
   }
 
-  moveMooseHome() { this.placeMoose(50, 40); }
+  moveMooseHome() { this.placeMoose(innerWidth < 820 ? 30 : 38, 64, 'right'); } // waits beside the fire
 
-  placeMoose(x, y) {
+  placeMoose(x, y, face) {
     const m = $('#moose');
     if (Math.abs(x - this.mooseAt.x) < 0.5 && Math.abs(y - this.mooseAt.y) < 0.5) return;
     m.classList.toggle('flip', x > this.mooseAt.x);
     m.classList.add('running');
     clearTimeout(this.runT);
-    this.runT = setTimeout(() => m.classList.remove('running'), 460);
+    this.runT = setTimeout(() => {
+      m.classList.remove('running');
+      if (face) m.classList.toggle('flip', face === 'right'); // turn to face the camper once arrived
+    }, 460);
     this.mooseAt = { x, y };
     m.style.left = x + '%';
     m.style.top = y + '%';
@@ -537,12 +588,14 @@ export class GameView {
         const mine = ev.pid === this.me;
         this.setTimer(ev.pid, ev.turnId, ev.remainingMs, ev.totalMs, ev.hidden, false, true);
         this.moveMooseTo(ev.pid);
+        this.setHint(null);
         if (mine) {
           sfx.yourTurn();
           const inp = $('#answer-input');
-          inp.focus();
+          const chat = $('#chat-input');
+          // don't yank focus away from a half-written radio message
+          if (!(document.activeElement === chat && chat.value.trim())) this.focusAnswer();
           if (inp.value.trim()) this.sendTyping(true);
-          inp.select();
         } else sfx.turn();
         break;
       }
@@ -573,7 +626,9 @@ export class GameView {
         if (ev.lifeGained) { setTimeout(() => { sfx.extraLife(); this.floatText(ev.pid, '+1 🔥 life!', 'golden'); }, 500); }
         if (ev.pid === this.me) {
           const inp = $('#answer-input');
-          inp.value = '';
+          // only clear what was submitted — keep anything typed since (pre-typing the next one)
+          if (!inp.value.trim() || inp.value.trim().toLowerCase() === String(ev.typed || '').trim().toLowerCase()) inp.value = '';
+          this.setHint(null);
           inp.classList.add('good');
           setTimeout(() => inp.classList.remove('good'), 400);
           if (ev.fuzzy) toast(`✨ Autocorrected “${ev.typed}” → ${ev.answer}`, 'good');
@@ -590,7 +645,7 @@ export class GameView {
         if (ev.pid === this.me) {
           const inp = $('#answer-input');
           inp.classList.remove('shake'); void inp.offsetWidth; inp.classList.add('shake');
-          inp.select();
+          // keep the text so a typo can be fixed with one keystroke
           const fn = REJECT_TEXT[ev.reason];
           if (fn && ev.reason !== 'unknown') toast(fn(ev), 'err');
         }

@@ -9,6 +9,13 @@ const addTo = (map, k, e) => { if (!k) return; let s = map.get(k); if (!s) map.s
 const GENERIC_WORDS = new Set('and the of a an in on at to for new old big little great grand royal saint mount river lake island city state national park street road house club team band movie film song show game book war world day night king queen man woman boy girl black white red blue green gold golden silver dog cat bird fish tree flower cheese pasta sauce breed'.split(' '));
 
 const TIER_KEYS = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'];
+// prompt words that never describe the answer itself
+const PROMPT_STOP = new Set('name a an the of in on at to for from with by and or any some something someone somebody that which who you your can could would might type types kind kinds sort sorts famous popular one thing things word words often commonly typically well known real classic notable common other another'.split(' '));
+
+/** Words of the category itself ("dog", "breed" for "Name a dog breed") — stripped from guesses like "golden retriever dog". */
+function categoryWords(prompt) {
+  return new Set(wordList(String(prompt || '').replace(/^name\s+/i, '')).filter((w) => w.length >= 3 && !PROMPT_STOP.has(w)));
+}
 
 /**
  * A playable category: prompt + tiered answer list with a fast lookup index.
@@ -28,6 +35,11 @@ class Category {
     this.squash = new Map(); // doubled letters collapsed → Set(entry)
     this.phon = new Map(); // sound-alike key → Set(entry)
     this.words = new Map(); // distinctive single word → Set(entry)
+    this.tails = new Map();
+    this.wordsPrimary = new Map();
+    this.sorted = new Map(); // words in any order: "rex tyrannosaurus" → Tyrannosaurus rex
+    this.core = new Map(); // answer minus the category's own words: "cheddar" → Cheddar cheese
+    this.catWords = categoryWords(this.prompt);
     this.complete = def.complete !== false; // false while still streaming in
     // Golden Antler bookkeeping: lower score = nicher. Curated goldens (Krillion, handmade) are fixed (-Infinity).
     this.goldenScore = Infinity;
@@ -116,7 +128,39 @@ class Category {
 
   _indexWords(text, entry) {
     const w = wordList(text);
-    if (w.length >= 2 && w.length <= 4) { (this._multi ||= []).push([w, entry]); this._wordsBuiltAt = -1; }
+    if (w.length >= 2 && w.length <= 4) {
+      (this._multi ||= []).push([w, entry, text === entry.name]);
+      this._wordsBuiltAt = -1;
+      this._coreBuiltAt = -1;
+      addTo(this.sorted, [...w].sort().join(' '), entry);
+    }
+  }
+
+  /** Index an extra name for an existing entry ("soccer" → Association football). Never steals another entry's name. */
+  addAlias(entry, raw) {
+    if (!entry) return false;
+    const a = cleanText(String(raw || ''), 80);
+    const k = answerKey(a);
+    if (!k || this.index.has(k)) return false;
+    this._indexKey(k, entry);
+    if (entry.aliases.length < 12) entry.aliases.push(a);
+    this._indexWords(a, entry);
+    return true;
+  }
+
+  /** "Cheddar cheese" also answers to "cheddar", "Golden Retriever dog" to Golden Retriever. */
+  _buildCore() {
+    const sig = this.size + ':' + this.catWords.size;
+    if (this._coreBuiltAt === sig || !this.catWords.size) return;
+    // a list that's still growing during play rebuilds at most every 2.5s (keeps per-keystroke hints instant)
+    if (this._coreTime && Date.now() - this._coreTime < 2500 && this.core.size) return;
+    this._coreTime = Date.now();
+    this.core = new Map();
+    for (const [w, entry] of this._multi || []) {
+      const rest = w.filter((x) => !this.catWords.has(x));
+      if (rest.length && rest.length < w.length && rest.join('').length >= 4) addTo(this.core, rest.join(''), entry);
+    }
+    this._coreBuiltAt = sig;
   }
 
   /**
@@ -126,19 +170,28 @@ class Category {
    */
   _buildWords() {
     if (this._wordsBuiltAt === this.size || !this._multi) return;
+    if (this._wordsTime && Date.now() - this._wordsTime < 2500 && this.words.size) return;
+    this._wordsTime = Date.now();
     const freq = new Map();
     for (const [w] of this._multi) for (const x of new Set(w)) freq.set(x, (freq.get(x) || 0) + 1);
     const common = Math.max(3, this.size * 0.004);
     const frequent = (x) => x.length >= 3 && (freq.get(x) || 0) >= common;
     const people = !!this.wd?.occupation || PEOPLE_RE.test(this.prompt);
     this.words = new Map();
-    for (const [w, entry] of this._multi) {
+    this.wordsPrimary = new Map(); // same, but only from an answer's main name (beats aliases like "the Italian Monet")
+    this.tails = new Map(); // "van gogh" → Vincent van Gogh, "da vinci" → Leonardo da Vinci
+    for (const [w, entry, primary] of this._multi) {
       const distinct = w.filter((x) => x.length >= 4 && !GENERIC_WORDS.has(x) && !frequent(x));
       const rest = w.filter((x) => !distinct.includes(x));
+      const put = (map, k) => { addTo(map, k, entry); if (primary && map === this.words) addTo(this.wordsPrimary, k, entry); };
       // "Tulip tree", "Sushi roll", "Banana pie": the other words are category staples
-      if (distinct.length === 1 && rest.length && rest.every((x) => frequent(x) || GENERIC_WORDS.has(x) && x.length >= 3)) addTo(this.words, distinct[0], entry);
+      if (distinct.length === 1 && rest.length && rest.every((x) => frequent(x) || GENERIC_WORDS.has(x) && x.length >= 3)) put(this.words, distinct[0]);
       // surnames in people categories: "Tchaikovsky", "Gump"
-      else if (people && w.length <= 3) { const last = w[w.length - 1]; if (last.length >= 4 && !GENERIC_WORDS.has(last)) addTo(this.words, last, entry); }
+      else if (people && w.length <= 4) {
+        const last = w[w.length - 1];
+        if (last.length >= 4 && !GENERIC_WORDS.has(last)) put(this.words, last);
+        if (w.length >= 3) put(this.tails, w.slice(-2).join(' '));
+      }
     }
     this._wordsBuiltAt = this.size;
   }
@@ -154,7 +207,7 @@ class Category {
    * Pick from tied candidates: unique → the only fresh (unused) one →
    * the single most common tier among the fresh ones (the conservative, lower-scoring read).
    */
-  static _choose(set, used) {
+  static _choose(set, used, famousFirst = false) {
     if (!set) return null;
     let list = [...new Set(set)];
     if (!list.length) return null;
@@ -166,7 +219,9 @@ class Category {
     }
     const minRank = Math.min(...list.map((e) => TIER_BY_KEY[e.tier].rank));
     const common = list.filter((e) => TIER_BY_KEY[e.tier].rank === minRank);
-    return common.length === 1 ? common[0] : null;
+    if (common.length === 1) return common[0];
+    // name-only hints ("Monet"): the most famous holder of that name (lists are built most-famous-first)
+    return famousFirst && common.length ? common.reduce((a, b) => (b.id < a.id ? b : a)) : null;
   }
 
   /**
@@ -174,7 +229,7 @@ class Category {
    * typo: 'strong' (default) | 'gentle' | 'off' (booleans accepted: true = strong).
    * used: Set of entry ids already hiked — ties resolve toward a fresh answer.
    */
-  match(input, { typo = 'strong', used = null } = {}) {
+  match(input, { typo = 'strong', used = null, _inner = false } = {}) {
     const strength = typo === true ? 'strong' : typo === false ? 'off' : typo;
     const key = answerKey(input);
     if (!key) return null;
@@ -182,6 +237,31 @@ class Category {
     if (exact) return { entry: exact, fuzzy: false };
     if (strength === 'off') return null;
     const strong = strength === 'strong';
+    const w0 = wordList(input);
+
+    // 0) the same words in another order, or the answer minus the category's own words
+    if (w0.length >= 2 && w0.length <= 4) {
+      const e = Category._choose(this.sorted.get([...w0].sort().join(' ')), used);
+      if (e) return { entry: e, fuzzy: true, how: 'order' };
+    }
+    if (this.catWords.size) {
+      this._buildCore();
+      const e = Category._choose(this.core.get(key), used);
+      if (e) return { entry: e, fuzzy: true, how: 'category' };
+    }
+
+    // 0b) an exact distinctive word or surname ("Monet", "Gump", "van Gogh") beats any typo guess
+    const people = !!this.wd?.occupation || PEOPLE_RE.test(this.prompt);
+    if (w0.length === 1 && w0[0].length >= 4 && !GENERIC_WORDS.has(w0[0]) && !this.catWords.has(w0[0]) && (people || this.size <= 2000)) {
+      this._buildWords();
+      const e = Category._choose(this.wordsPrimary.get(w0[0]), used, people) || Category._choose(this.words.get(w0[0]), used, people);
+      if (e) return { entry: e, fuzzy: true, how: 'word' };
+    }
+    if (people && w0.length === 2) {
+      this._buildWords();
+      const e = Category._choose(this.tails.get(w0.join(' ')), used, true);
+      if (e) return { entry: e, fuzzy: true, how: 'surname' };
+    }
 
     // 1) doubled-letter slips: "fusili" → Fusilli
     if (strong) {
@@ -227,16 +307,21 @@ class Category {
       if (e) return { entry: e, fuzzy: true, how: 'sound' };
     }
 
-    // 4) one distinctive word of a short answer: "Gump" → Forrest Gump
-    const w = wordList(input);
-    const people = !!this.wd?.occupation || PEOPLE_RE.test(this.prompt);
-    if (w.length === 1 && w[0].length >= 4 && !GENERIC_WORDS.has(w[0]) && (people || this.size <= 2000)) {
-      this._buildWords();
-      const e = Category._choose(this.words.get(w[0]), used);
-      if (e) return { entry: e, fuzzy: true, how: 'word' };
+    const w = w0;
+
+    // 5) they named the category too: "golden retreiver dog", "the cheddar cheese" → try again without it
+    if (!_inner && this.catWords.size && w.length >= 2) {
+      const rest = w.filter((x) => !this.catWords.has(x));
+      if (rest.length && rest.length < w.length) {
+        const m = this.match(rest.join(' '), { typo: strength, used, _inner: true });
+        if (m) return { ...m, fuzzy: true };
+      }
     }
     return null;
   }
+
+  /** Build the lazy lookup indexes ahead of the first guess (called when a trail goes live). */
+  warm() { try { this._buildWords(); this._buildCore(); } catch { /* best effort */ } }
 
   counts() {
     const c = { kindling: 0, trailhead: 0, backcountry: 0, deepwoods: 0, golden: 0 };
@@ -312,4 +397,4 @@ function sanitizeCategoryDef(def, i = 0) {
   return { id: 'u-' + i + '-' + Math.random().toString(36).slice(2, 7), prompt, source: 'custom', golden, tiers, generated: !!def.generated, wd, goldenScale: ['pct', 'sl'].includes(def.goldenScale) ? def.goldenScale : null };
 }
 
-module.exports = { Category, sanitizeCategoryDef, TIER_KEYS };
+module.exports = { Category, sanitizeCategoryDef, TIER_KEYS, categoryWords };

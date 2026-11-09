@@ -1,5 +1,5 @@
 // Trading Post, Lodge Leaderboard, How to Play, and the end-of-game podium.
-import { $, $$, esc, modal, toast, tierVar } from './ui.js';
+import { $, $$, esc, modal, toast, tierVar, bannerStyle } from './ui.js';
 import { sfx } from './sfx.js';
 import { mascotSVG } from './art.js';
 import { app } from './main.js';
@@ -38,7 +38,7 @@ export function openTradingPost() {
     }).join('');
     m.body.innerHTML = `
       <div class="tp-top">
-        <div class="tp-preview">${mascotSVG(eq.mascot, eq.hat)}<div class="plate ${['aurora', 'starry', 'gold'].includes(cos.banner.find((b) => b.id === eq.banner)?.color) ? 'banner-' + cos.banner.find((b) => b.id === eq.banner).color : ''}" style="--banner:${cos.banner.find((b) => b.id === eq.banner)?.color}">${esc(me.name)}</div></div>
+        <div class="tp-preview">${mascotSVG(eq.mascot, eq.hat)}<div class="plate ${bannerStyle(eq.banner, app.catalog).cls}" style="${bannerStyle(eq.banner, app.catalog).style}">${esc(me.name)}</div></div>
         <div>
           <h3>${me.rankIcon} ${esc(me.rank)}</h3>
           <div class="tp-stats">
@@ -91,6 +91,8 @@ export function openHowTo() {
       <li>✏️ <b>Pre-type</b> anytime — your box is always open; Enter only counts on your turn.</li>
       <li>👀 Everyone sees what the active camper is typing, every wrong guess they make (struck out under their stump), and each camper's last answer.</li>
       <li>🚫 No repeats — once an answer is hiked, it's gone for the rest of that category.</li>
+      <li>✨ On your turn a little chip above your answer box previews what will happen: <b>✓</b> it's on the map, <b>✨</b> autocorrect will fix it, <b>🧭</b> the ranger verified it, <b>🚫</b> already hiked.</li>
+      <li>🗺️ Custom and generated trails move on after a set number of answers (the HUD shows how many are left), so no category drags on forever.</li>
       <li>📻 Chat on the Ranger Radio anytime.</li>
     </ul>
     <h3>Rarity tiers</h3>

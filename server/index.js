@@ -21,7 +21,7 @@ try {
 
 const express = require('express');
 const { Server } = require('socket.io');
-const { TIERS, MODES, GIMMICKS, SOURCES, DEFAULT_SETTINGS, LIMITS, RANKS } = require('./config');
+const { TIERS, MODES, GIMMICKS, SOURCES, DEFAULT_SETTINGS, SETTING_RANGES, LIMITS, RANKS } = require('./config');
 const { CATALOG } = require('./cosmetics');
 const { ProfileStore } = require('./profiles');
 const { KrillionBank } = require('./krillion');
@@ -52,7 +52,8 @@ const hub = { io, profiles, questions, ai, krillion, rooms };
 
 // ---------------- HTTP ----------------
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: '1h', extensions: ['html'] }));
+// no-cache + ETag: after a redeploy every camper gets the matching HTML/JS/CSS on their next load (304s keep it fast)
+app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: 0, etag: true, extensions: ['html'], setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
@@ -67,7 +68,7 @@ app.get('/api/status', (_req, res) => {
 });
 
 app.get('/api/catalog', (_req, res) => {
-  res.json({ tiers: TIERS, modes: MODES, gimmicks: GIMMICKS, sources: SOURCES, defaults: DEFAULT_SETTINGS, limits: LIMITS, ranks: RANKS, cosmetics: CATALOG, botLevels: Object.fromEntries(Object.entries(LEVELS).map(([k, v]) => [k, v.name])) });
+  res.json({ tiers: TIERS, modes: MODES, gimmicks: GIMMICKS, sources: SOURCES, defaults: DEFAULT_SETTINGS, ranges: SETTING_RANGES, limits: LIMITS, ranks: RANKS, cosmetics: CATALOG, botLevels: Object.fromEntries(Object.entries(LEVELS).map(([k, v]) => [k, v.name])) });
 });
 
 app.get('/api/leaderboard', (_req, res) => res.json(profiles.leaderboard(30)));

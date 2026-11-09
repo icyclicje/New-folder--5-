@@ -4,15 +4,14 @@
  *
  * Game stages: intro → turn ⇄ judging → intermission → (picking|generating)? → turn … → over
  */
-const { MODES, GIMMICKS, SOURCES, DEFAULT_SETTINGS, LIMITS, TIER_BY_KEY, TIERS, rankFor } = require('./config');
-const { clamp, cleanText, randId, shuffle, pick } = require('./util');
+const { MODES, GIMMICKS, SOURCES, DEFAULT_SETTINGS, SETTING_RANGES, LIMITS, TIER_BY_KEY, TIERS, rankFor } = require('./config');
+const { clamp, cleanText, randId, shuffle, pick, answerKey } = require('./util');
 const { ratingChanges } = require('./profiles');
 const { unlockedIds, CATALOG } = require('./cosmetics');
 const { makeBot, botTakeTurn, LEVELS } = require('./bots');
 
 const INTRO_MS = 3200;
 const POP_PAUSE_MS = 3000;
-const PICK_MS = 20000;
 const GEN_TIMEOUT_MS = 25000;
 const RESULTS_MS = 15000;
 const QUICK_START_MS = 20000;
@@ -48,6 +47,10 @@ function normalizeSettings(input, prev = DEFAULT_SETTINGS) {
   if (i.aiJudge != null) s.aiJudge = !!i.aiJudge;
   if (i.isPublic != null) s.isPublic = !!i.isPublic;
   if (i.duelTrail != null) s.duelTrail = cleanText(String(i.duelTrail), LIMITS.promptMax);
+  for (const [k, [lo, hi]] of Object.entries(SETTING_RANGES)) if (i[k] != null && Number.isFinite(Number(i[k]))) s[k] = clamp(Math.round(Number(i[k])), lo, hi);
+  if (['auto', 'kindling', 'trailhead', 'backcountry'].includes(i.tierFloor)) s.tierFloor = i.tierFloor;
+  if (['clockwise', 'random'].includes(i.moosePath)) s.moosePath = i.moosePath;
+  for (const k of ['goldenLife', 'showTyping', 'revealLeftovers', 'liveHints']) if (i[k] != null) s[k] = !!i[k];
   if (s.mode === 'lonewolf') { s.lives = 1; s.extraLives = false; }
   if (s.mode === 'duel') { s.maxPlayers = 2; s.gimmick = 'none'; s.extraLives = false; }
   return s;
@@ -268,7 +271,10 @@ class Room {
     if (!g) return;
     const text = cleanText(String(raw ?? ''), LIMITS.answerMax);
     if ((g.stage === 'turn' || g.stage === 'judging') && g.turn?.pid === pid) {
-      this.io.to(this.code).emit('typing', { pid, text });
+      g.turn.typed = text;
+      if (this.settings.showTyping) this.io.to(this.code).emit('typing', { pid, text });
+      else this.io.to(this.code).emit('typing', { pid, text: text ? '•'.repeat(Math.min(14, text.length)) : '' });
+      this.sendHint(pid, text);
       this.prejudge(text);
     } else if (g.stage === 'picking' && g.special?.leaderId === pid) {
       this.io.to(this.code).emit('typing', { pid, text, carving: true });
@@ -388,15 +394,72 @@ class Room {
     const turn = g.turn;
     this._prejudgeT = setTimeout(() => {
       if (this.game !== g || g.turn !== turn || g.stage !== 'turn') return;
-      if (g.category.match(text, { typo: this.settings.typoTolerance, used: g.usedEntries })) return; // already on the list
-      const limit = this.hub.ai.enabled ? 3 : 8; // Wikidata checks are free; Claude checks cost a little
+      if (this.matchSafe(text)) return; // already on the list
+      const limit = this.hub.ai.enabled ? 4 : 6; // Wikidata checks are free (but rate-limited); Claude checks cost a little
       turn.prejudged = (turn.prejudged || 0) + 1;
       if (turn.prejudged > limit) return;
-      this.hub.questions.judge(g.category, text);
-    }, 420);
+      const cat = g.category;
+      if (this.settings.liveHints && !this.hub.questions.judgedSync(cat, text)) this.emitHint(turn.pid, { text, status: 'checking' });
+      this.hub.questions.judge(cat, text).then((v) => {
+        if (this.game !== g || g.turn !== turn || g.category !== cat || answerKey(turn.typed || '') !== answerKey(text)) return;
+        if (this.settings.liveHints) this.emitHint(turn.pid, v?.valid ? { text, status: 'verified', answer: cleanText(v.canonical || text, 80) } : { text, status: 'none' });
+      }, () => {});
+    }, 240);
   }
 
-  minTierRank() { return TIER_BY_KEY[MODES[this.settings.mode].minTier || 'kindling'].rank; }
+  /** Autocorrect lookup that can never take a turn down with it. */
+  matchSafe(text) {
+    const g = this.game;
+    try { return g?.category ? g.category.match(text, { typo: this.settings.typoTolerance, used: g.usedEntries }) : null; }
+    catch (err) { console.error('[match]', err); return null; }
+  }
+
+  emitHint(pid, hint) {
+    const p = this.players.get(pid);
+    if (!p || p.isBot || !p.connected) return;
+    this.io.to(p.socketId).emit('hint', hint);
+  }
+
+  /**
+   * Live autocorrect preview for the holder only: "✓ Tyrannosaurus", "already hiked by Sam",
+   * "Kindling is banned". Nothing is shown for text that isn't on the map (no answer fishing).
+   */
+  sendHint(pid, text) {
+    const g = this.game;
+    if (!this.settings.liveHints || !g?.category || g.stage !== 'turn') return;
+    if (answerKey(text).length < 2) return this.emitHint(pid, { text, status: 'none' });
+    const m = this.matchSafe(text);
+    if (!m) {
+      const cached = this.hub.questions.judgedSync(g.category, text);
+      if (cached?.valid) return this.emitHint(pid, { text, status: 'verified', answer: cleanText(cached.canonical || text, 80) });
+      return this.emitHint(pid, { text, status: 'none' });
+    }
+    const e = m.entry;
+    if (g.usedEntries.has(e.id)) return this.emitHint(pid, { text, status: 'taken', answer: e.name, by: this.players.get(g.usedBy.get(e.id))?.name || '' });
+    if (TIER_BY_KEY[e.tier].rank < this.minTierRank()) return this.emitHint(pid, { text, status: 'banned', answer: e.name, tier: e.tier });
+    this.emitHint(pid, { text, status: m.fuzzy ? 'fuzzy' : 'match', answer: e.name });
+  }
+
+  minTierKey() { const f = this.settings.tierFloor; return f && f !== 'auto' ? f : MODES[this.settings.mode].minTier || 'kindling'; }
+  minTierRank() { return TIER_BY_KEY[this.minTierKey()]?.rank || 0; }
+
+  /** Answers allowed on the current trail before the moose moves on (0 = until a poof). */
+  trailLimit() {
+    const g = this.game;
+    if (!g?.category || this.isDuel()) return 0;
+    const s = this.settings;
+    const lims = [MODES[s.mode].rotateEvery, s.trailMax, (g.category.generated || g.catSpecial) ? s.genTrailMax : 0].filter((n) => n > 0);
+    return lims.length ? Math.min(...lims) : 0;
+  }
+
+  /** Where the moose runs after a good answer. */
+  passFrom(pid) {
+    if (this.settings.moosePath === 'random') {
+      const others = this.aliveIds().filter((id) => id !== pid);
+      if (others.length) return pick(others);
+    }
+    return this.nextAlive(pid);
+  }
 
   // ---------------- game: categories ----------------
   setCategory(cat, reason, extra = {}) {
@@ -414,12 +477,14 @@ class Room {
     };
     g.category = cat;
     g.catAnswers = 0;
+    g.catSpecial = ['leader', 'echo'].includes(reason);
     g.usedEntries = new Set();
     g.usedBy = new Map();
     g.log = [];
     g.usedCats.add(cat.id);
     for (const p of this.players.values()) p.lastAnswer = null;
     this.emitEv('category', { category: cat.publicInfo(), reason, ...extra });
+    setImmediate(() => cat.warm?.());
   }
 
   nextCategory(reason) {
@@ -494,7 +559,7 @@ class Room {
     const now = Date.now();
     if (now - (p.lastSubmit || 0) < 120) return;
     p.lastSubmit = now;
-    const m = g.category.match(text, { typo: this.settings.typoTolerance, used: g.usedEntries });
+    const m = this.matchSafe(text);
     if (m) return this.resolveMatch(p, text, m.entry, { fuzzy: m.fuzzy });
     if (this.canJudge()) return this.judge(p, text);
     this.reject(p, text, 'unknown');
@@ -532,9 +597,12 @@ class Room {
     if (verdict && verdict.valid) {
       const canon = cleanText(verdict.canonical || '', 80) || text;
       const cat = g.category;
-      let entry = cat.match(canon, { typo: false })?.entry;
+      // the item may already be on the map under another of its names ("T rex" → Tyrannosaurus)
+      const names = [canon, ...(verdict.names || []).map((n) => cleanText(n, 80))].filter(Boolean);
+      let entry = names.map((n) => cat.match(n, { typo: false })?.entry).find(Boolean);
       const tier = TIER_BY_KEY[verdict.tier] && verdict.tier !== 'golden' ? verdict.tier : 'deepwoods';
-      if (!entry) entry = cat.add(`${canon}|${text}`, tier);
+      if (!entry) entry = cat.add([...new Set([...names, text])].join('|'), tier);
+      else cat.addAlias(entry, text);
       // a player answer nicher than the current Golden Antler takes the antler (if nobody's found it yet)
       if (entry && !g.usedEntries.has(entry.id)) {
         const score = cat.goldenScale === 'sl' ? verdict.sl : cat.goldenScale === 'pct' ? verdict.known_pct : undefined;
@@ -575,7 +643,10 @@ class Room {
     if (entry.tier === 'golden') p.goldens++;
     let lifeGained = false;
     const goal = this.settings.extraLifeGoal;
-    if (this.settings.extraLives && p.lives < p.maxLives) {
+    if (entry.tier === 'golden' && this.settings.goldenLife && p.lives < p.maxLives) {
+      p.lives++;
+      lifeGained = true;
+    } else if (this.settings.extraLives && p.lives < p.maxLives) {
       p.meter += pts;
       if (p.meter >= goal) {
         p.lives++;
@@ -601,13 +672,17 @@ class Room {
       // one question bank for the whole duel — hike it all and it's a tie
       if (this.checkDuelTie()) return;
     } else {
+      const limit = this.trailLimit();
       const rotate = MODES[this.settings.mode].rotateEvery;
-      if ((rotate && g.catAnswers >= rotate) || this.eligibleRemaining() < 2) {
-        if (!rotate) this.sys('🗺️ That trail is all hiked out — new category!');
+      if (limit && g.catAnswers >= limit) {
+        if (limit !== rotate) this.sys(`🗺️ ${g.catAnswers} answers on “${g.category.prompt}” — the moose heads down a fresh trail!`, 'game');
+        this.nextCategory('limit');
+      } else if (this.eligibleRemaining() < 2) {
+        this.sys('🗺️ That trail is all hiked out — new category!');
         this.nextCategory('rotate');
       }
     }
-    this.startTurn(this.nextAlive(p.id));
+    this.startTurn(this.passFrom(p.id));
   }
 
   /** Duel: the bank is empty (and the ranger has stopped scouting) → tie. */
@@ -640,8 +715,8 @@ class Room {
     // reveal some of what was left on the trail
     const unused = g.category.entries.filter((e) => !g.usedEntries.has(e.id));
     const golden = unused.find((e) => e.tier === 'golden');
-    const reveal = shuffle(unused.filter((e) => e.tier !== 'golden' && e.tier !== 'kindling')).slice(0, 5).map((e) => ({ text: e.name, tier: e.tier }));
-    if (golden) reveal.unshift({ text: golden.name, tier: 'golden', note: golden.note || '' });
+    const reveal = this.settings.revealLeftovers ? shuffle(unused.filter((e) => e.tier !== 'golden' && e.tier !== 'kindling')).slice(0, 5).map((e) => ({ text: e.name, tier: e.tier })) : [];
+    if (golden && this.settings.revealLeftovers) reveal.unshift({ text: golden.name, tier: 'golden', note: golden.note || '' });
     this.emitEv('pop', { pid: p.id, lives: p.lives, eliminated, placement: p.placement, reveal, prompt: g.category.prompt });
     if (eliminated) this.sys(`💥 ${p.name}'s moose went POOF! They're out of the woods (placed #${p.placement}).`, 'game');
 
@@ -700,8 +775,16 @@ class Room {
 
   leaderId() {
     const alive = this.aliveIds().map((id) => this.players.get(id));
-    alive.sort((a, b) => b.score - a.score || b.lives - a.lives || a.seat - b.seat);
+    alive.sort((a, b) => b.lives - a.lives || b.score - a.score || a.seat - b.seat);
     return alive[0]?.id;
+  }
+
+  /** Is there a clear leader right now (more lives, or same lives and more points, than the runner-up)? */
+  clearLeader() {
+    const alive = this.aliveIds().map((id) => this.players.get(id)).sort((a, b) => b.lives - a.lives || b.score - a.score);
+    if (alive.length < 2) return alive[0]?.id || null;
+    const [a, b] = alive;
+    return a.lives > b.lives || a.score > b.score ? a.id : null;
   }
 
   beginSpecial() {
@@ -709,13 +792,14 @@ class Room {
     if (this.settings.gimmick === 'leaderpick') {
       const leaderId = this.leaderId();
       const suggestions = this.hub.questions.suggest('', 6).map((s) => s.prompt);
+      const pickMs = this.settings.pickSec * 1000;
       g.stage = 'picking';
-      g.special = { type: 'leaderpick', leaderId, deadline: Date.now() + PICK_MS, suggestions, specCount: 0, specText: null };
+      g.special = { type: 'leaderpick', leaderId, deadline: Date.now() + pickMs, totalMs: pickMs, suggestions, specCount: 0, specText: null };
       const leader = this.players.get(leaderId);
-      this.sys(`🪓 Special round! ${leader?.name} leads the pack and gets to carve the next trail sign.`, 'game');
-      this.emitEv('special', { kind: 'leaderpick', leaderId, deadline: PICK_MS, suggestions });
+      this.sys(`🪓 Special round! ${leader?.name} has the most lives and gets to carve the next trail sign.`, 'game');
+      this.emitEv('special', { kind: 'leaderpick', leaderId, deadline: pickMs, totalMs: pickMs, suggestions });
       this.emitState();
-      g.special.timer = this.setT(() => this.autoLeaderPick(), PICK_MS);
+      g.special.timer = this.setT(() => this.autoLeaderPick(), pickMs);
       if (leader?.isBot) this.setT(() => { if (g.stage === 'picking' && g.special?.leaderId === leaderId) this.handleLeaderPick(leaderId, pick(suggestions)); }, 2600);
     } else if (this.settings.gimmick === 'echotrail') {
       this.runEcho();
@@ -976,10 +1060,13 @@ class Room {
         remaining: g.category ? this.eligibleRemaining() : null,
         special: g.special ? {
           type: g.special.type, leaderId: g.special.leaderId, suggestions: g.special.suggestions,
-          remainingMs: g.special.deadline ? Math.max(0, g.special.deadline - now) : null,
+          remainingMs: g.special.deadline ? Math.max(0, g.special.deadline - now) : null, totalMs: g.special.totalMs || null,
           generating: g.special.generating, from: g.special.from,
         } : null,
-        leaderId: this.settings.gimmick === 'leaderpick' && this.players.get(this.leaderId())?.score > 0 ? this.leaderId() : null,
+        leaderId: this.settings.gimmick === 'leaderpick' && g.stage !== 'intro' ? this.clearLeader() : null,
+        minTier: this.minTierKey(),
+        trailLeft: (() => { const l = this.trailLimit(); return l ? Math.max(0, l - g.catAnswers) : null; })(),
+        catSpecial: !!g.catSpecial,
         echoFrom: this.settings.gimmick === 'echotrail' ? g.lastAccepted?.text || null : null,
         order: g.order,
       };

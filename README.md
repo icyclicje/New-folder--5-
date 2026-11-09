@@ -5,20 +5,34 @@ A fast-paced campfire elimination word game for **2–8 campers**. Everyone sits
 ## Features
 
 - **Krillion question bank (default).** The server crawls every daily Krillion prompt since Dive #1 (805+ prompts, up to ~8,000 tiered answers each) and refreshes every few hours for new dailies.
-- **Five rarity tiers.** Same structure and point ladder as Krillion's, re-skinned: 🪵 Kindling 10 · 🥾 Trailhead 30 · 🏕️ Backcountry 60 · 🌲 Deep Woods 85 · 🦌 Golden Antler 100. Each category hides one Golden Antler answer with a fun fact. On generated categories it is the nichest verifiable answer.
-- **The Golden Antler can move.** Generated categories keep scouting for more answers during play. If a nichier answer turns up, the Golden Antler moves to it. If a player names something nichier than the current Golden Antler, they claim it. Once found, it never moves.
-- **Strong autocorrect by default.** Off / Gentle / Strong. Strong fixes:
-  - keyboard typos
-  - doubled letters ("raviolli")
+- **Five rarity tiers.** Same structure and point ladder as Krillion's, re-skinned: 🪵 Kindling 10 · 🥾 Trailhead 30 · 🏕️ Backcountry 60 · 🌲 Deep Woods 85 · 🦌 Golden Antler 100. Each category hides one Golden Antler answer with a fun fact.
+- **The Golden Antler on generated categories is the nichest *verifiable* answer.**
+  - It must have an English Wikipedia article.
+  - The fewest Wikipedia language editions wins; ties go to the fewest monthly readers.
+  - Its fun fact is the article's first sentence plus a line like "Only ~14 people a month read its Wikipedia page."
+  - With Claude on, Claude's "nichest" suggestions are checked against Wikidata and only win if they're real and nicher still.
+- **The Golden Antler can move.** Generated categories keep scouting during play, and the Golden Antler moves deeper when something nicher turns up. A player who names something nicher than the current one claims it. Once found, it never moves.
+- **Strong autocorrect by default.** Off / Gentle / Strong. Strong handles:
+  - keyboard typos and doubled letters ("raviolli")
   - sound-alikes ("sekwoya" → Sequoia)
   - abbreviations (St, Mt, n)
-  - surnames ("Monet" → Claude Monet)
+  - surnames and two-word surnames ("Monet" → Claude Monet, "van gogh" → Vincent van Gogh)
   - single distinctive words ("tulip" → Tulip tree)
+  - words in any order ("rex tyrannosaurus")
+  - naming the category too ("golden retriever dog")
+  - real-world aliases and short names pulled from Wikidata ("soccer", "pigeon", "Ford")
 
-  Ties go to an unused answer, and then to the more common, lower-scoring one.
+  Ties go to an unused answer, then to the more common, lower-scoring one. For a bare surname, the tie goes to the most famous holder of that name.
+- **Live autocorrect preview.** Only the camper holding the moose sees a chip above their answer box while they type:
+  - ✓ the answer it matches
+  - ✨ what autocorrect will turn it into
+  - 🧭 the ranger is checking, or has verified, an answer that isn't on the list
+  - 🚫 already hiked, or below the tier floor
+
+  Text that isn't on the map shows nothing, so you can't fish for answers.
 - **Extra lives.** Points fill a 🍡 marshmallow meter toward an extra life. It takes a while, and you can never hold more than one life over your start.
 - **What everyone can see:**
-  - live typing from whoever holds the moose
+  - live typing from whoever holds the moose (or just •••, if the host turns it off)
   - their wrong guesses, struck out under their stump
   - every camper's last answer
   - leftover answers revealed after each poof
@@ -40,7 +54,7 @@ A fast-paced campfire elimination word game for **2–8 campers**. Everyone sits
 
   Every mode uses the same rules for every seat, a random first holder and a fixed clockwise order.
 - **Gimmicks (every N rounds):**
-  - **🪓 Leader's Pick.** The camper in the lead types any category and it's generated on the fly. Generation starts while they're still typing.
+  - **🪓 Leader's Pick.** The camper with the most lives (ties: most points) types any category, and it's generated on the fly. They get 40 seconds by default. Generation starts while they're still typing.
   - **📣 Echo Trail.** The last answer guessed seeds a related next category. That category is pre-computed while the previous round is still being played.
 - **📒 Field Guide (custom questions):**
   - **Generate any category** you type, with all five tiers.
@@ -48,6 +62,14 @@ A fast-paced campfire elimination word game for **2–8 campers**. Everyone sits
   - **Browse and search the full Krillion archive** and Campfire Classics.
   - **Hand-write** your own tiers.
   - Import and export as JSON.
+- **⚙️ Custom campsite rules (lobby → "More campsite rules"):**
+  - **Leader's Pick time:** 15–90 s.
+  - **Custom-trail length:** Leader's Pick, Echo and generated categories move on to a fresh trail after N answers (default 14, ∞ = until a poof).
+  - **Every-trail length:** the same limit, for every category.
+  - **Easiest tier that counts:** Auto, All, No Kindling or Backcountry+.
+  - **Moose path:** clockwise or random.
+  - **Golden Antler heals:** finding the Golden Antler restores a lost life.
+  - **Toggles:** live autocorrect preview, live typing, and revealing leftover answers after a poof.
 - **🛶 Trading Post.** 12 critters, 12 hats and 8 name banners, unlocked by wins, Golden Antler finds and rating.
 - **🐾 Critter bots.** Cub, Ranger and Legend bots for practice in custom games. Never in ranked.
 - **Fully synthesized forest audio.** Woodpecker turn alerts, cricket fuse ticks, banjo plucks for niche answers, an elk bugle for Golden Antlers, a wolf howl on elimination, and a crackling-fire ambience.
@@ -57,23 +79,34 @@ A fast-paced campfire elimination word game for **2–8 campers**. Everyone sits
 Every typed category (Leader's Pick, Echo Trail, duel trails, the Field Guide) tries the following in order:
 
 1. **An exact known prompt.** This is instant (Krillion, Campfire Classics, or the generated cache). If the curated list is small, the ranger keeps scouting Wikidata in the background and adds real answers without changing the curated tiers.
-2. **Wikidata (no key needed).** Members of the matching class are ranked by real-world fame: the number of Wikipedia editions covering each one.
-   - It understands phrasings like "dog breed", "type of pasta", "Pixar movie", "country in Africa", "famous painter" (people ranked by their main occupation), "dinosaur" (taxa, without birds) and "Taylor Swift song".
-   - Tiers follow fame percentiles, so broad categories get thousands of Trailhead and Backcountry answers.
-   - Deep Woods only keeps items at least two Wikipedias cover.
+2. **Wikidata (no key needed).** Members of the matching class, ranked by real-world fame (how many Wikipedia editions cover each one).
+   - **Readings.** It understands phrasings like "dog breed", "type of pasta", "Pixar movie", "country in Africa", "famous painter" (people ranked by their main occupation), "dinosaur" (taxa, without birds) and "Taylor Swift song".
+   - **Popular pass (~1–4s).** Every member with real fame, modelled either as an instance or as a kind of the class, at any depth. Display names come from English Wikipedia, so you get "Garlic", not "Allium sativum". Taxa include famous groups, so "Owl", "Penguin" and "Swan" count for birds. The round can start here.
+   - **While the round is on**, the ranger keeps searching:
+     - English aliases and short names ("soccer", "pigeon", "Ford")
+     - a second Wikidata engine, because the two engines' data differs slightly
+     - the long tail: thousands of Backcountry and Deep Woods answers, then deeper pages
+     - common-name items for animal categories ("eagle", "duck")
+     - the Golden Antler, last
+   - **Tiers.** Tiers follow fame percentiles. They are gentler while only the popular pass is in, and re-tiering only ever moves an answer to a more common tier. Deep Woods only keeps items that at least two Wikipedias cover.
+   - **Engines.** Bulk lists use QLever, with the official Wikidata Query Service racing it. An engine that rate-limits (HTTP 429) is left alone for a while, and the other one takes over.
 3. **Claude, if `ANTHROPIC_API_KEY` is set.** This runs alongside Wikidata, and the results merge live:
    - A small core stream returns the prompt, a size estimate, a Wikidata lookup hint and the obvious answers.
    - The round starts at about 12 answers.
    - Letter-range streams fan out in proportion to the category's size: 1 for small, 4 for medium, 8 for large, 13 for huge.
    - Every answer is tagged with a tier.
-   - Every stream reports its nichest answer with an estimated "% who'd know it", and the Golden Antler sits on the lowest one.
+   - Every stream suggests its nichest answer. With a Wikidata class, the suggestion must be verified there and be nicher than Wikidata's own pick. Without one, the lowest "% who'd know it" wins.
    - An extra search wave runs while the category is still in play.
-4. **Fallback.** A known prompt covering every word of the request. Otherwise, a Datamuse word-association board.
+4. **Fallback.** A known prompt covering every word of the request. This is also used if Wikidata hasn't answered within 10 seconds. Otherwise, a Datamuse word-association board.
 
 **Ranger checks** cover answers missing from a generated list:
 
 - Wikidata, which is free, and Claude race each other, and the first "valid" wins.
-- Checks start while the player is still typing, so pressing Enter is usually instant. Otherwise a Wikidata check takes about 0.3–0.9s.
+- The Wikidata check finds the item by name, then:
+  - **Description check.** "eagle: large carnivorous bird" ✓ for birds. This catches common names that aren't formal members of the class.
+  - **Membership check.** A bounded class-membership query on the official service, with QLever as backup.
+- If a verified answer is already on the map under another name, it counts as that entry ("T rex" → Tyrannosaurus), so nobody can double-dip.
+- Checks start while the player is still typing, so pressing Enter is usually instant. Otherwise a check takes about 0.2–2s.
 
 **Topic → bank:** Claude plans N categories, then generates three at a time. Without a key, the bank uses the topic's own Wikidata class plus every matching Krillion or Campfire prompt.
 
@@ -83,9 +116,11 @@ The default model is `claude-opus-5-5` at low effort, with server-side refusal f
 |---|---|
 | `MIVI_AI_FAST=1` | Opus fast mode (premium pricing) |
 | `MIVI_AI_MODEL` | Model used for generation |
+| `MIVI_AI_SLICE_MODEL` | Optional faster model for the bulk letter-range streams |
 | `MIVI_AI_CONCURRENCY` | Parallel streams (default 16) |
 | `MIVI_AI_WAVES` | Extra in-play search waves (default 1) |
 | `MIVI_QLEVER_URL` | Alternative Wikidata SPARQL engine |
+| `MIVI_CONTACT` | Contact (URL or email) added to the User-Agent sent to Wikidata and Wikipedia. Their API etiquette asks for one, and it helps avoid rate limits on busy servers. |
 
 A large generated category with Claude streams roughly 15–30k output tokens. If cost matters, lower the waves or the concurrency.
 

@@ -177,8 +177,9 @@ function editDistance(a, b, max = 3) {
 
 // words that carry little meaning when comparing category prompts
 const STOP = new Set('name a an the of in on at to for from with by and or any some something someone somebody that which who you your can could would might type kind sort famous popular one thing things word words often commonly typically well known'.split(' '));
+const PROMPT_SYN = { movie: 'film', flick: 'film', tv: 'television', telly: 'television', automobile: 'car', vehicle: 'car', sport: 'sport', footballer: 'soccer player', nation: 'country' };
 function promptTokens(prompt) {
-  return normalize(prompt).split(' ').filter((w) => w && !STOP.has(w)).map(singular);
+  return normalize(prompt).split(' ').filter((w) => w && !STOP.has(w)).map(singular).map((w) => PROMPT_SYN[w] || w);
 }
 function promptSimilarity(a, b) {
   const A = new Set(promptTokens(a)), B = new Set(promptTokens(b));
