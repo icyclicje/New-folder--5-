@@ -24,6 +24,7 @@ const path = require('path');
 const { Category } = require('./answers');
 const { cleanText, polishPrompt, answerKey } = require('./util');
 const wikidata = require('./wikidata');
+const hunt = require('./hunt');
 
 let Anthropic = null;
 try { Anthropic = require('@anthropic-ai/sdk'); Anthropic = Anthropic.default || Anthropic; } catch { /* optional */ }
@@ -78,6 +79,15 @@ List up to ${n} ${wave ? 'MORE answers that most lists would miss — favour B a
 Each line: "TIER|Canonical name|alias|alias" where TIER is T, B or D (aliases optional).
 Final line: "NICHEST|<the most obscure answer in your list>|<estimated % of people who'd recognise it>|<fun fact under 120 characters>".
 If no valid answers start with those letters, output only "NONE".`;
+
+const webInstr = (p, n) => `Category: "${p}"
+
+This category needs current or niche facts, so search the web first — official pages and channels, Wikipedia lists, fan wikis, charts and databases — and only list answers the results confirm.
+Then output up to ${n} answers, one per line and nothing else: "TIER|Canonical name|alias|alias", where TIER is K (almost everyone would say it), T (well known), B (fans would know it) or D (obscure). Use any view counts, sales or chart positions you saw to set the tier. For videos, songs or episodes, the canonical name is the exact title.
+Final line: "NICHEST|<the most obscure answer in your list>|<estimated % of people who'd recognise it>|<fun fact under 120 characters>".`;
+
+const WEB_TOOL = { type: 'web_search_20260209', name: 'web_search' };
+const WEB_TOOL_BASIC = { type: 'web_search_20250305', name: 'web_search' }; // for models without dynamic filtering
 
 class Limiter {
   constructor(n) { this.n = n; this.active = 0; this.q = []; }
@@ -198,6 +208,9 @@ class AIGen {
     const signal = controller.signal;
     const category = new Category({ id: 'ai-' + Date.now().toString(36), prompt, source: 'ai', sourceLabel: 'Ranger-generated', generated: true, complete: false, goldenScale: 'pct' });
     category.sources = new Set(['ai']);
+    const web = hunt.needsWeb(prompt);
+    if (web) category.web = true;
+    const webController = new AbortController(); // a "too few answers" REJECT must not stop the web rescue
     let rejectReason = null;
     let promptSeen = false;
     let size = null;
@@ -234,6 +247,19 @@ class AIGen {
     };
 
     // Wikidata in parallel: from the raw prompt now, or from Claude's LOOKUP hint if that fails
+    // deep search on the web (Claude's web search tool) — once per category
+    let webP = null;
+    const runWeb = (why) => webP || (webP = this.webHunt(prompt, {
+      signal: webController.signal,
+      onLine: (tier, rest) => { category.add(rest, tier); category.sources.add('web'); if (!promptSeen && category.size >= READY_AT) promptSeen = true; progress(); },
+      onNiche: (a, pct, fact) => offerNiche(a, pct, fact),
+    }).then((n) => { this.log.info?.(`[ai] web search (${why}) found ${n} for "${prompt}"`); return n; })
+      .catch((err) => { if (!webController.signal.aborted) this.log.warn?.(`[ai] web search failed: ${err.message}`); return 0; }));
+    // free Wikipedia lists/categories when Wikidata has no class for it
+    let freeP = null;
+    const runFree = () => freeP || (freeP = hunt.wikiInto(category, prompt, () => progress()).catch(() => 0));
+    if (web) tasks.push(runWeb('live web question'));
+
     const wdOpts = () => ({ into: category, goldenOwner: true, onProgress: () => { category.sources.add('wikidata'); progress(); } });
     let wdJob = wikidata.generate(prompt, wdOpts());
     let hint = null;
@@ -242,9 +268,9 @@ class AIGen {
     tasks.push(wdJob.done.catch(() => {}));
     const tryHint = () => wdTried.then((ok) => {
       if (ok) return;
-      if (!hint || hint === 'none' || signal.aborted) { settleNiche('pct'); return; }
+      if (!hint || hint === 'none' || signal.aborted) { settleNiche('pct'); tasks.push(runFree()); return; }
       wdJob = wikidata.generate(prompt, { ...wdOpts(), hint });
-      wdJob.ready.then(() => settleNiche('verify'), () => settleNiche('pct'));
+      wdJob.ready.then(() => settleNiche('verify'), () => { settleNiche('pct'); tasks.push(runFree()); });
       return wdJob.done.catch(() => {});
     });
 
@@ -254,6 +280,7 @@ class AIGen {
       const ranges = size === 'tiny' ? [['A', 'Z']] : FANOUT[size];
       const n = PER_SLICE[size];
       for (const r of ranges) tasks.push(runSlice(sliceInstr(prompt, r, n, false), Math.round(n * 9)).catch((err) => { if (!signal.aborted) this.log.warn?.(`[ai] slice ${r.join('-')} failed: ${err.message}`); }));
+      if (size === 'tiny' || size === 'small') tasks.push(wdTried.then((ok) => (ok ? 0 : runWeb('niche category'))));
     };
 
     const runSlice = (instr, maxTokens) => this._streamLines(instr, maxTokens, (line) => {
@@ -273,7 +300,13 @@ class AIGen {
       if (!m) return;
       const tag = m[1].toUpperCase(), val = m[2].trim();
       if (tag === 'PROMPT') { category.prompt = polishPrompt(val) || category.prompt; promptSeen = true; }
-      else if (tag === 'REJECT') { rejectReason = cleanText(val, 140); controller.abort(); wdJob.abort(); readyReject(new Error(rejectReason)); }
+      else if (tag === 'REJECT') {
+        const why = cleanText(val, 140);
+        if (/few|not enough|too (?:small|narrow|niche|obscure)|obscure|insufficient|unclear|ambiguous|not sure|unknown/i.test(why) && !/hate|sexual|explicit|offensive|violen|inappropriate/i.test(why)) {
+          promptSeen = true; // keep the player's wording and search the web for it
+          tasks.push(runWeb('rescue: ' + why), runFree());
+        } else { rejectReason = why; controller.abort(); webController.abort(); wdJob.abort(); readyReject(new Error(rejectReason)); }
+      }
       else if (tag === 'SIZE') launchFanout(val.toLowerCase().replace(/[^a-z]/g, ''));
       else if (tag === 'LOOKUP') { hint = cleanText(val, 80).toLowerCase() === 'none' ? 'none' : cleanText(val, 80); tasks.push(tryHint()); }
       else if (tag === 'K') category.add(val, 'kindling');
@@ -282,12 +315,18 @@ class AIGen {
       progress();
     }, signal, true);
 
+    // a thin first pass searches harder (web + Wikipedia) before giving up
+    const rescueThin = async (fallbackMsg) => {
+      if (isReady || rejectReason) return;
+      await Promise.allSettled([runWeb('thin first pass'), wdTried.then((ok) => (ok ? 0 : runFree()))]);
+      if (category.size >= 4) { promptSeen = true; markReady(); } else if (!isReady) readyReject(new Error(rejectReason || fallbackMsg));
+    };
     core.then(() => {
       promptSeen = true;
       if (!size) launchFanout('medium');
       if (category.size >= 4) markReady();
-      else if (!isReady) readyReject(new Error(rejectReason || 'Not enough answers for that category.'));
-    }, (err) => { if (!isReady) readyReject(new Error(rejectReason || err.message)); });
+      else rescueThin('Not enough answers for that category.');
+    }, (err) => { rescueThin(err.message); });
 
     // first full pass, then deeper waves while the category is still being played
     const waitAll = async () => {
@@ -320,9 +359,90 @@ class AIGen {
     done.catch(() => {});
     ready.catch(() => { controller.abort(); wdJob.abort(); this.inflight.delete(key); });
 
-    const job = { category, ready, done, abort: () => { controller.abort(); wdJob.abort(); }, how: 'ai' };
+    const job = { category, ready, done, abort: () => { controller.abort(); webController.abort(); wdJob.abort(); }, how: 'ai' };
     this.inflight.set(key, job);
     return job;
+  }
+
+  /**
+   * Deep search with Claude's web search tool, for categories Claude can't list reliably from memory:
+   * a YouTube channel's videos, this year's releases, small fandoms. Streams "TIER|name" lines into onLine.
+   * Returns how many answers it found.
+   */
+  async webHunt(prompt, { signal, onLine, onNiche, max = 150, maxUses = 5 } = {}) {
+    let tool = { ...WEB_TOOL, max_uses: maxUses };
+    const messages = [{ role: 'user', content: webInstr(prompt, max) }];
+    let found = 0;
+    const handle = (raw) => {
+      const line = raw.replace(/^[-*•\s]+/, '').trim();
+      if (!line.includes('|')) return;
+      const parts = line.split('|').map((x) => x.trim());
+      const tag = parts[0].toUpperCase().replace(/[^A-Z]/g, '');
+      if (tag === 'NICHEST') { onNiche?.(parts[1], parts[2], parts.slice(3).join(' ')); return; }
+      const tier = TAG[tag];
+      const rest = parts.slice(1).filter(Boolean).join('|');
+      if (tier && rest && rest.length < 160) { found++; onLine?.(tier, rest); }
+    };
+    for (let turn = 0; turn < 4; turn++) {
+      if (signal?.aborted) break;
+      let msg;
+      try {
+        msg = await this.limiter.run(async () => {
+          const stream = this.client.beta.messages.stream(this._params({
+            max_tokens: 12000,
+            system: SYSTEM,
+            tools: [tool],
+            output_config: { effort: 'medium' },
+            messages,
+          }), { signal: signal || AbortSignal.timeout(120000) });
+          let buf = '';
+          stream.on('text', (delta) => {
+            buf += delta;
+            let nl;
+            while ((nl = buf.indexOf('\n')) >= 0) { handle(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+          });
+          const m = await stream.finalMessage();
+          if (buf.trim()) handle(buf);
+          return m;
+        }, true);
+      } catch (err) {
+        // a model without the newer search tool: retry once with the basic one
+        if (err?.status === 400 && tool.type === WEB_TOOL.type && /web_search|tool/i.test(err.message || '')) { tool = { ...WEB_TOOL_BASIC, max_uses: maxUses }; continue; }
+        throw err;
+      }
+      if (msg.stop_reason === 'refusal') break;
+      // a long server-side search loop pauses; send it back as-is and the server picks up where it left off
+      if (msg.stop_reason === 'pause_turn') { messages.push({ role: 'assistant', content: msg.content }); continue; }
+      break;
+    }
+    return found;
+  }
+
+  /** Web-checked referee for live/niche trails, when Claude's memory alone says no. ~3–8s. */
+  async webJudge(prompt, answer) {
+    const ck = 'web::' + AIGen.promptKey(prompt) + '::' + answerKey(answer);
+    if (this.judgeCache.has(ck)) return this.judgeCache.get(ck);
+    let tool = { ...WEB_TOOL, max_uses: 2 };
+    const ask = () => this.client.beta.messages.create(this._params({
+      max_tokens: 3000,
+      tools: [tool],
+      output_config: { effort: 'low' },
+      messages: [{
+        role: 'user',
+        content: `Party game referee. Category: "${prompt}". A player answered: "${cleanText(answer, 80)}".
+Search the web to check whether this is a genuinely correct answer (allow misspellings, short forms and alternate titles; reject near-misses). Reply with exactly one line and nothing else:
+"VALID|<canonical name>|<kindling, trailhead, backcountry or deepwoods>|<estimated % of people who'd recognise it>" or "INVALID".`,
+      }],
+    }), { signal: AbortSignal.timeout(20000) });
+    let msg;
+    try { msg = await ask(); } catch (err) {
+      if (err?.status === 400 && /web_search|tool/i.test(err.message || '')) { tool = { ...WEB_TOOL_BASIC, max_uses: 2 }; msg = await ask(); } else throw err;
+    }
+    const text = msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+    const m = /VALID\|([^|\n]+)\|\s*(kindling|trailhead|backcountry|deepwoods)\s*\|\s*([\d.]+)/i.exec(text);
+    const out = m && !/INVALID/i.test(text.slice(0, m.index)) ? { valid: true, canonical: cleanText(m[1], 80), tier: m[2].toLowerCase(), known_pct: parseFloat(m[3]), by: 'web' } : { valid: false };
+    this.judgeCache.set(ck, out);
+    return out;
   }
 
   /** Ask a ranger whether an unlisted answer is valid (+ how niche it is). ~1s. */

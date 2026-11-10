@@ -73,7 +73,7 @@ function coolDown(url, res) {
 
 async function getJSON(url, ms, accept = 'application/json') {
   const isApi = !url.includes('/sparql') && !url.includes('qlever');
-  if (!isApi && cooling(url)) throw new Error('rate-limited (cooling down)');
+  if (cooling(url)) throw new Error('rate-limited (cooling down)');
   const once = async () => {
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(url, { headers: { 'User-Agent': UA, 'Api-User-Agent': UA, Accept: accept }, signal: AbortSignal.timeout(ms) });
@@ -784,4 +784,7 @@ async function judgeRaw(wd, answer) {
   return Promise.any(tasks).catch(() => ({ valid: false }));
 }
 
-module.exports = { generate, judge, plan, corePhrase, descFits, headWords, looksLatin, chooseName, pageviews };
+/** Raw SPARQL rows (both engines, QLever first) — for the hunt's one-off lookups. */
+const sparqlRows = (query, ms = 9000) => sparql(query, { ms });
+
+module.exports = { generate, judge, plan, corePhrase, descFits, headWords, looksLatin, chooseName, pageviews, sparqlRows };

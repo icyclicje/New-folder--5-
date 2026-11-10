@@ -97,18 +97,39 @@ Every typed category (Leader's Pick, Echo Trail, duel trails, the Field Guide) t
      - the Golden Antler, last
    - **Tiers.** Tiers follow fame percentiles. They are gentler while only the popular pass is in, and re-tiering only ever moves an answer to a more common tier. Deep Woods only keeps items that at least two Wikipedias cover.
    - **Engines.** Bulk lists use QLever, with the official Wikidata Query Service racing it. An engine that rate-limits (HTTP 429) is left alone for a while, and the other one takes over.
-3. **Claude, if `ANTHROPIC_API_KEY` is set.** This runs alongside Wikidata, and the results merge live:
+3. **The hunt: Wikipedia.** This runs alongside Wikidata when there's no key (`server/hunt.js`), and merges into Claude's category when there is one:
+   - **Wikipedia categories** ("Category:Goat breeds", plus relevant subcategories when the main one is thin) and **"List of …" pages**. List entries are kept only if their own page description fits the question.
+   - **Fame from real readership.** Every answer is ranked by its Wikipedia page's monthly readers, so Kindling is what people actually know (Boer, Angora and Saanen for goat breeds).
+   - **Deep search** when the quick pass is thin:
+     - re-phrasings ("breed of goat" → "goat breed", plurals, "movie" → "film");
+     - the topic article's own "List of …" links;
+     - a full-text search that keeps only pages whose description says they belong.
+   - **Approximation** for questions too broad to list ("something red", "something you find at the beach", Echo Trail's "linked to …"). The ranger builds a best-guess trail from the question's key concept, using word associations plus the concept's own Wikipedia article. It keeps the player's exact wording.
+   - **Polite by design.** Requests to Wikipedia go one at a time. If Wikimedia says 429, the hunt skips it for a cool-down period and carries on with the other sources instead of stalling. Set `MIVI_CONTACT`; Wikimedia throttles anonymous clients harder.
+4. **Claude, if `ANTHROPIC_API_KEY` is set.** This runs alongside Wikidata and Wikipedia, and the results merge live:
    - A small core stream returns the prompt, a size estimate, a Wikidata lookup hint and the obvious answers.
    - The round starts at about 12 answers.
    - Letter-range streams fan out in proportion to the category's size: 1 for small, 4 for medium, 8 for large, 13 for huge.
    - Every answer is tagged with a tier.
    - Every stream suggests its nichest answer. With a Wikidata class, the suggestion must be verified there and be nicher than Wikidata's own pick. Without one, the lowest "% who'd know it" wins.
    - An extra search wave runs while the category is still in play.
-4. **Fallback.** A known prompt covering every word of the request. This is also used if Wikidata hasn't answered within 10 seconds. Otherwise, a Datamuse word-association board.
+   - **Deep web search.** Claude's web search tool (`web_search_20260209`) runs:
+     - **straight away** for live questions — a channel's videos ("Name a YouTube video from MrBeast"), streamers, podcasts, "latest" or this year's releases;
+     - for small, niche categories Wikidata can't verify;
+     - when Claude alone would say there are too few answers, or its first pass comes up thin.
+
+     Web-found answers stream in as they're confirmed. Unlisted answers on a live trail get a web-checked ranger ruling if Claude's memory says no.
+5. **Fallback.** Only if every search comes up empty:
+   - a known prompt covering every word of the request;
+   - then a word-association board;
+   - finally, in the room, the **closest known trail** to what was asked (not a random one), with a note explaining why.
+
+   If the time limit is reached while answers are already in, the round starts with them and the hunt keeps searching. Live-web questions without a key say they need web search instead of guessing.
 
 **Ranger checks** cover answers missing from a generated list:
 
-- Wikidata, which is free, and Claude race each other, and the first "valid" wins.
+- Wikidata, Wikipedia (both free) and Claude race each other, and the first "valid" wins.
+- **On hunted trails**, an unlisted answer counts if its Wikipedia page sits in one of the trail's Wikipedia categories or its description fits the question. On approximate trails, the answer's own associations must point back at the question's concept. A seashell's associations include "beach"; "red" is one of the first words used to describe a strawberry, but not a banana.
 - The Wikidata check finds the item by name, then:
   - **Description check.** "eagle: large carnivorous bird" ✓ for birds. This catches common names that aren't formal members of the class.
   - **Membership check.** A bounded class-membership query on the official service, with QLever as backup.
@@ -159,8 +180,9 @@ server/
   room.js        lobby, chat and the authoritative game engine (turns, fuses, gimmicks, rating)
   krillion.js    Krillion archive crawler and disk cache
   questions.js   question sources, fast on-the-fly paths, topic → bank
-  ai.js          Claude size-aware fan-out generator, answer judge, Echo prompts
+  ai.js          Claude size-aware fan-out generator, web-search deep search, answer judges, Echo prompts
   wikidata.js    Wikidata generator (fame-ranked tiers, nichest Golden Antler) + fast live judge
+  hunt.js        the hunt: Wikipedia categories/lists, deep re-phrasings, approximations for broad questions + judge
   fallback.js    no-key fallbacks (archive search + Datamuse associations)
   answers.js     tiered category index, strong autocorrect, Golden Antler bookkeeping
   bots.js        critter bots

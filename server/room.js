@@ -12,7 +12,7 @@ const { makeBot, botTakeTurn, LEVELS } = require('./bots');
 
 const INTRO_MS = 3200;
 const POP_PAUSE_MS = 3000;
-const GEN_TIMEOUT_MS = 25000;
+const GEN_TIMEOUT_MS = 25000; // after this, play starts with whatever the hunt has found (it keeps searching)
 const RESULTS_MS = 15000;
 const QUICK_START_MS = 20000;
 const QUICK_FULL_START_MS = 5000;
@@ -878,7 +878,13 @@ class Room {
         this.io.to(this.code).emit('genprogress', { count: cat.size, prompt: cat.prompt, counts: cat.counts(), sources: [...(cat.sources || [cat.source])], ms: now - g.special?.startedAt });
       },
     });
-    withTimeout(job.ready, GEN_TIMEOUT_MS, 'The ranger took too long scouting.').then((cat) => {
+    // too slow? start with what the hunt has found so far — it keeps searching during play
+    const playable = withTimeout(job.ready, GEN_TIMEOUT_MS, 'The ranger took too long scouting.').catch((err) => {
+      const partial = job.category;
+      if (partial && partial.size >= 4 && /too long/.test(err.message)) { partial.complete = false; return partial; }
+      throw err;
+    });
+    playable.then((cat) => {
       if (this.game !== g || g.stage !== 'generating') return;
       this.setCategory(cat, reason, { ...extra, how: job.how, ms: Date.now() - g.special.startedAt });
       // keep pushing late-arriving answers to the counter
@@ -888,9 +894,16 @@ class Room {
     }).catch((err) => {
       if (this.game !== g || g.stage !== 'generating') return;
       job.abort?.();
-      this.sys(`🌧️ The trail washed out (${err.message}). Grabbing a random category instead.`);
       g.special = null;
-      this.nextCategory('pop');
+      // nothing mappable at all: the closest known trail to what was asked beats a random one
+      const near = this.hub.questions.closestKnown?.(text);
+      if (near) {
+        this.sys(`🧭 The ranger couldn't map “${text}” (${err.message.replace(/[.]$/, '')}) — heading down the closest known trail instead.`);
+        this.setCategory(near, reason, { ...extra, how: 'closest' });
+      } else {
+        this.sys(`🌧️ The trail washed out (${err.message}). Grabbing a random category instead.`);
+        this.nextCategory('pop');
+      }
       this.startTurn(g.nextHolder);
     });
   }

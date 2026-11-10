@@ -10,6 +10,7 @@ const path = require('path');
 const { Category, sanitizeCategoryDef } = require('./answers');
 const { shuffle, pick, polishPrompt, cleanText, promptTokens, answerKey: answerKeyOf } = require('./util');
 const wikidata = require('./wikidata');
+const hunt = require('./hunt');
 const { expandTopic, rankPrompts, findSamePrompt, associationBoard } = require('./fallback');
 
 class QuestionService {
@@ -134,54 +135,71 @@ class QuestionService {
     }
     const cached = this.ai.getCached(prompt);
     if (cached) return { category: cached, ready: Promise.resolve(cached), done: Promise.resolve(cached), abort() {}, how: 'cache' };
-    if (this.ai.enabled) return this.ai.generate(prompt, { onProgress }); // Claude + Wikidata, merged live
+    if (this.ai.enabled) {
+      // Claude + Wikidata + Wikipedia (+ web search for live/niche questions), merged live
+      const ai = this.ai.generate(prompt, { onProgress });
+      let h = null;
+      const rescue = (err) => {
+        if (/declined|hateful|sexual|family|offensive|inappropriate/i.test(err?.message || '')) throw err;
+        h = this._hunt(prompt, { onProgress, allowKnown });
+        return h.ready;
+      };
+      const ready = ai.ready.catch(rescue);
+      ready.catch(() => {});
+      return {
+        ready,
+        get category() { return h ? h.category : ai.category; },
+        get done() { return h ? h.done : ai.done; },
+        get how() { return h ? h.how : ai.how; },
+        abort() { ai.abort?.(); h?.abort?.(); },
+      };
+    }
 
-    // No AI key: 1) Wikidata — real members ranked by fame, thousands for broad categories
+    // No AI key: the hunt — Wikidata classes, Wikipedia categories and lists, deep re-phrasings,
+    // then (for questions too broad to list) an approximation built from the question itself
+    return this._hunt(prompt, { onProgress, allowKnown });
+  }
+
+  _hunt(prompt, { onProgress, allowKnown = true } = {}) {
     const linked = /linked to "(.+)"/i.exec(prompt);
     const phrase = linked ? linked[1] : prompt
       .replace(/^name\s+/i, '')
       .replace(/^(a|an|the|some|something|someone|any)\s+/i, '')
       .replace(/^(types?|kinds?|sorts?|varieties|variety|brands?)\s+of\s+/i, '');
-    const job = { category: null, abort() {}, how: 'wikidata' };
-    const wd = linked ? null : wikidata.generate(prompt, { onProgress });
-    if (wd) { job.category = wd.category; job.abort = wd.abort; }
-    const fallback = async () => {
-      // 2) a known trail that covers every content word of the request
-      if (allowKnown && !linked) {
-        const want = promptTokens(prompt);
-        const hit = want.length && rankPrompts(prompt, this.allSummaries()).find((s) => s.total >= 15 && want.every((w) => promptTokens(s.prompt).includes(w)));
-        const c = hit && this.getById(hit.id);
-        if (c) { job.how = 'known'; return c; }
-      }
-      // 3) a word-association board
-      job.how = 'assoc';
-      return associationBoard(phrase);
+    // a known trail that covers every content word of the request beats a guess
+    const knownCover = () => {
+      if (!allowKnown || linked) return null;
+      const want = promptTokens(prompt);
+      const hit = want.length && rankPrompts(prompt, this.allSummaries()).find((s) => { const t = promptTokens(s.prompt); return s.total >= 15 && want.every((w) => t.includes(w)) && t.length <= want.length + 1; });
+      const c = hit && this.getById(hit.id);
+      if (c) c.huntHow = 'known';
+      return c || null;
     };
-    // Wikidata normally answers in 1–4s; if it's having a slow day, a known trail that covers the request beats waiting
-    job.ready = wd
-      ? new Promise((resolve, reject) => {
-        let settled = false;
-        const t = setTimeout(async () => {
-          if (settled || linked || !allowKnown) return;
-          const want = promptTokens(prompt);
-          const hit = want.length && rankPrompts(prompt, this.allSummaries()).find((x) => x.total >= 15 && want.every((w) => promptTokens(x.prompt).includes(w)));
-          const c = hit && this.getById(hit.id);
-          if (c && !settled) { settled = true; job.how = 'known'; wd.abort(); resolve(c); }
-        }, 10000);
-        wd.ready.then((c) => { if (!settled) { settled = true; clearTimeout(t); resolve(c); } }, (err) => { if (settled) return; clearTimeout(t); settled = true; fallback().then(resolve, reject); });
-      })
-      : fallback();
-    job.done = wd
-      ? job.ready.then((c) => (c === wd.category ? wd.done.then((d) => { this.ai.remember(d); return d; }, () => c) : c))
-      : job.ready;
+    const assoc = async () => { const c = await associationBoard(phrase); c.huntHow = 'assoc'; return c; };
+    const job = hunt.huntCategory(prompt, { onProgress, beforeApprox: knownCover, fallbacks: [assoc, () => this.closestKnown(prompt)] });
+    // remember verified finds for instant reuse — never a best guess or a word-association board
+    job.done = job.done.then((c) => { if (c === job.category && (c.wd || c._wp?.items.size)) this.ai.remember(c); return c; });
     job.ready.catch(() => {}); // callers that only speculate never await this
     job.done.catch(() => {});
     return job;
   }
 
+  /**
+   * The closest known trail to a question (approximate, by shared words) — what the ranger falls back
+   * to when a typed category can't be mapped at all, instead of a random trail.
+   */
+  closestKnown(prompt) {
+    const want = promptTokens(prompt);
+    if (!want.length) return null;
+    const hit = rankPrompts(prompt, this.allSummaries()).find((x) => x.total >= 30 && promptTokens(x.prompt).some((w) => want.includes(w)));
+    const c = hit && this.getById(hit.id);
+    if (c) c.huntHow = 'closest';
+    return c || null;
+  }
+
   /** Can unlisted answers in this category be checked live? */
   canJudge(category) {
-    return !!category?.wd || (this.ai.enabled && !!category?.generated);
+    return !!category?.wd || !!category?.hunt || (this.ai.enabled && !!category?.generated);
   }
 
   /**
@@ -195,7 +213,14 @@ class QuestionService {
     if (cache.has(key)) return cache.get(key);
     const tasks = [];
     if (category.wd) tasks.push(wikidata.judge(category.wd, text).then((v) => (v.valid ? { ...v, by: 'wikidata' } : Promise.reject(new Error('no')))));
-    if (this.ai.enabled && category.generated) tasks.push(this.ai.judge(category.prompt, text).then((v) => (v.valid ? { ...v, by: 'ai' } : Promise.reject(new Error('no')))));
+    if (category.hunt) tasks.push(hunt.judge(category, text).then((v) => (v.valid ? { ...v, by: 'wikipedia' } : Promise.reject(new Error('no')))));
+    if (this.ai.enabled && category.generated) {
+      // live/niche trails (a channel's videos, this year's releases): Claude checks the web if its memory says no
+      const web = category.web || hunt.needsWeb(category.prompt);
+      tasks.push(this.ai.judge(category.prompt, text)
+        .then((v) => (v.valid || !web ? v : this.ai.webJudge(category.prompt, text)))
+        .then((v) => (v.valid ? { ...v, by: 'ai' } : Promise.reject(new Error('no')))));
+    }
     const p = tasks.length ? Promise.any(tasks).catch(() => ({ valid: false })) : Promise.resolve({ valid: false });
     p.then((v) => { p.settled = v; });
     cache.set(key, p);

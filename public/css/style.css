@@ -539,7 +539,7 @@ input:focus, textarea:focus, select:focus { border-color: rgba(255, 195, 92, .7)
 .crown .ic { --duo: .55; }
 
 /* moose */
-.moose { position: absolute; left: 50%; top: 52%; width: clamp(96px, 10vw, 140px); transform: translate(-50%, -84%); transition: left .42s cubic-bezier(.5, 0, .3, 1.15), top .42s cubic-bezier(.5, 0, .3, 1.15); z-index: 7; pointer-events: none; --puff: 0; filter: drop-shadow(0 8px 10px rgba(0, 0, 0, .35)); }
+.moose { position: absolute; left: 50%; top: 52%; width: clamp(104px, 10.8vw, 152px); transform: translate(-50%, -84%); transition: left .42s cubic-bezier(.5, 0, .3, 1.15), top .42s cubic-bezier(.5, 0, .3, 1.15); z-index: 7; pointer-events: none; --puff: 0; filter: drop-shadow(0 8px 10px rgba(0, 0, 0, .35)); }
 .moose-inner { transition: transform .2s; }
 .moose.flip .moose-inner { transform: scaleX(-1); }
 .moose .m-body { transform-box: fill-box; transform-origin: 50% 70%; transform: scale(calc(1 + var(--puff) * .5)); transition: transform .12s linear; }
@@ -840,7 +840,7 @@ input:focus, textarea:focus, select:focus { border-color: rgba(255, 195, 92, .7)
   .bubble { font-size: .7rem; max-width: 130px; padding: 3px 8px; }
   .bubble.typing { font-size: .78rem; }
   .wrongs span { font-size: .62rem; max-width: 90px; }
-  .moose { width: clamp(72px, 19vw, 100px); }
+  .moose { width: clamp(78px, 21vw, 108px); }
   .tp-top, .fg { grid-template-columns: 1fr; }
   .podium .step { width: 90px; } .podium .step .mascot { width: 60px; height: 60px; }
   .results-list li { grid-template-columns: 34px 1fr auto; }

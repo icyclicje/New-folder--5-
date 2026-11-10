@@ -142,9 +142,10 @@ function face(a, ids) {
         + `<ellipse cx="50" cy="70.5" rx="12.5" ry="9.5" fill="url(#${M})"/>`
         + eyes(E, 55.5, 11.8, 4.6) + nose(50, 66, 4, 3.3, a.nose) + mouth(50, 72.6, '#1a171f') + blush(B, 67.5, 30, 5);
     case 'moose':
-      return `<path d="M34 61C34 55.5 40 53.5 50 53.5C60 53.5 66 55.5 66 61L67.4 74C67.4 82.5 60 87.5 50 87.5C40 87.5 32.6 82.5 32.6 74Z" fill="url(#${M})"/>`
-        + `<ellipse cx="44" cy="62" rx="7" ry="3" fill="#fff" opacity=".18"/>`
-        + `<ellipse cx="43.6" cy="77" rx="2.5" ry="3.2" fill="${a.nose}" transform="rotate(14 43.6 77)"/><ellipse cx="56.4" cy="77" rx="2.5" ry="3.2" fill="${a.nose}" transform="rotate(-14 56.4 77)"/>`
+      return `<path d="M45.4 84C43.8 90 44.4 95.6 47.2 98.2C48.8 99.6 51.2 99.6 52.8 98.2C55.6 95.6 56.2 90 54.6 84Z" fill="${a.fur2}" stroke="${deep(a.fur2, 0.5)}" stroke-width="1.8" stroke-linejoin="round"/>`
+        + `<path d="M37 60C37 55 42.5 53 50 53C57.5 53 63 55 63 60L65.6 70.5C68.6 81 61.2 88.5 50 88.5C38.8 88.5 31.4 81 34.4 70.5Z" fill="url(#${M})" stroke="${deep(a.fur2, 0.45)}" stroke-width="1.2" stroke-opacity=".5"/>`
+        + `<ellipse cx="44" cy="61.5" rx="7" ry="3" fill="#fff" opacity=".18"/><ellipse cx="50" cy="72" rx="11" ry="6" fill="#fff" opacity=".1"/>`
+        + `<path d="M40.6 78.4C40 74.6 42.6 72.8 44.6 74.6C46.2 76.2 45.4 80.4 43 80.8C41.8 81 40.8 80 40.6 78.4Z" fill="${a.nose}"/><path d="M59.4 78.4C60 74.6 57.4 72.8 55.4 74.6C53.8 76.2 54.6 80.4 57 80.8C58.2 81 59.2 80 59.4 78.4Z" fill="${a.nose}"/>`
         + `<path d="M44 83.4Q50 86.4 56 83.4" stroke="${ink}" stroke-width="1.6" fill="none" stroke-linecap="round"/>`
         + eye(38, 48.5, 4.3, E) + eye(62, 48.5, 4.3, E) + blush(B, 58, 27, 4.6);
     default: return '';
@@ -152,12 +153,19 @@ function face(a, ids) {
 }
 
 /** Palmate moose antler, local coords: base at (0,0), growing up and to the right. */
-const ANTLER = 'M0 2C3 -3 7 -6 12 -7C11 -12 11.5 -17 14 -21C15 -18 16.5 -16.5 18.5 -16C19.5 -21 21.5 -25 25 -28C25.8 -24.5 26.8 -22.5 28.5 -21.5C30.5 -25 33.5 -27.5 37.5 -28.5C37 -25 36.4 -23 35.5 -21.5C38.5 -22.5 41.5 -22.5 45 -21C43.5 -18 41.5 -16 39 -15C41.5 -14 43.5 -12.5 45 -10.5C40 -9 34 -8.5 28 -8C20 -7 13 -3.5 7 4.5Z';
+const ANTLER = 'M0 0C3 -3 7 -5 11 -6C10 -10 10 -13 11.5 -16C12.8 -13.5 14 -11.5 15.5 -10.5C15 -17 16.5 -23 20 -27C21 -24 22 -22.5 23.5 -22C24.5 -26.5 27 -30 30.5 -31.5C30.8 -28 31 -26 31.5 -24.5C33.5 -28 36.5 -30 40 -30C39 -27 38.5 -25 38 -23.5C41 -25 44 -25.5 47 -24.5C45 -21.5 43.5 -19.5 41.5 -18.5C44 -18 46.5 -16.5 48 -14.5C44 -11 37 -9 30 -8.5C21 -7.5 12 -4 6 3Z';
 function antlerPair(lx, ly, rx, ry, s = 1, fill = null, line = '#7d6240', tilt = 0) {
   let defs = '';
   if (!fill) { const g = nid('ant'); defs = `<defs>${lin(g, '#fbf0d6', '#cfb383')}</defs>`; fill = `url(#${g})`; }
-  const one = (x, y, flip) => `<g transform="translate(${x} ${y}) scale(${flip ? -s : s} ${s}) rotate(${-tilt})"><path d="${ANTLER}" fill="${fill}" stroke="${line}" stroke-width="${f1(2 / s)}" stroke-linejoin="round"/><path d="M13 -9.5C21 -12.5 30 -14.5 38 -14.5" stroke="#fff" stroke-opacity=".45" stroke-width="${f1(1.4 / s)}" fill="none" stroke-linecap="round"/></g>`;
+  const one = (x, y, flip) => `<g transform="translate(${x} ${y}) scale(${flip ? -s : s} ${s}) rotate(${-tilt})"><path d="${ANTLER}" fill="${fill}" stroke="${line}" stroke-width="${f1(2 / s)}" stroke-linejoin="round"/><path d="M14 -10.5C22 -14 31 -15.5 41 -15" stroke="#fff" stroke-opacity=".45" stroke-width="${f1(1.4 / s)}" fill="none" stroke-linecap="round"/></g>`;
   return defs + one(lx, ly, true) + one(rx, ry, false);
+}
+
+/** One antler at (x, y); flip = grows to the left. */
+function antler(x, y, flip, s, gradId, line, tilt = 0) {
+  return `<g transform="translate(${x} ${y}) scale(${flip ? -s : s} ${s}) rotate(${-tilt})"><path d="${ANTLER}" fill="url(#${gradId})" stroke="${line}" stroke-width="${f1(2.1 / s)}" stroke-linejoin="round"/>`
+    + '<path d="M16 -11C22 -10 30 -10.6 38 -12.6C33 -9.6 26 -8.8 19 -8.4Z" fill="#7a5a34" opacity=".18"/>'
+    + `<path d="M14 -10.5C22 -14 31 -15.5 41 -15" stroke="#fff" stroke-opacity=".5" stroke-width="${f1(1.4 / s)}" fill="none" stroke-linecap="round"/></g>`;
 }
 
 // ---------------------------------------------------------------- hats
@@ -228,7 +236,7 @@ function hat(id) {
         <path d="M65.5 30.5l6.5-4.3 2 6.4Z" fill="#e8592b" stroke="#a83d1a" stroke-width=".8"/><circle cx="69" cy="31" r="1" fill="#fff"/><path d="M68 32.5q-1 3 1 4" stroke="#bbb" stroke-width=".7" fill="none"/></g>`;
     }
     case 'antlers':
-      return `<g>${antlerPair(36, 38.5, 64, 38.5, 0.9)}<path d="M24 42Q50 30 76 42" stroke="#7a3b2e" stroke-width="4.6" fill="none" stroke-linecap="round"/><path d="M27 40.5Q50 30.5 73 40.5" stroke="#b25a46" stroke-width="1.4" fill="none" stroke-linecap="round" opacity=".7"/></g>`;
+      return `<g>${antlerPair(36, 38.5, 64, 38.5, 0.78, null, '#7d6240', 8)}<path d="M24 42Q50 30 76 42" stroke="#7a3b2e" stroke-width="4.6" fill="none" stroke-linecap="round"/><path d="M27 40.5Q50 30.5 73 40.5" stroke="#b25a46" stroke-width="1.4" fill="none" stroke-linecap="round" opacity=".7"/></g>`;
     case 'pinecrown':
       return `<g><path d="M23.5 42Q50 31.5 76.5 42" stroke="#3f5f27" stroke-width="5.4" fill="none" stroke-linecap="round"/>
         <path d="M27 40Q50 31 73 40" stroke="#6f9a45" stroke-width="1.6" fill="none" stroke-linecap="round" opacity=".8"/>
@@ -236,7 +244,7 @@ function hat(id) {
     case 'goldantlers': {
       const k = nid('gold');
       return `<g><defs><linearGradient id="${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff4b0"/><stop offset=".45" stop-color="#ffcf45"/><stop offset="1" stop-color="#d38f12"/></linearGradient></defs>
-        ${antlerPair(36, 38.5, 64, 38.5, 0.95, `url(#${k})`, '#8a5c08')}<path d="M24 42Q50 30 76 42" stroke="#d99a15" stroke-width="4.6" fill="none" stroke-linecap="round"/>
+        ${antlerPair(36, 38.5, 64, 38.5, 0.8, `url(#${k})`, '#8a5c08', 8)}<path d="M24 42Q50 30 76 42" stroke="#d99a15" stroke-width="4.6" fill="none" stroke-linecap="round"/>
         <path d="M50 10.5c.6 3 1.6 4 4.6 4.6-3 .6-4 1.6-4.6 4.6-.6-3-1.6-4-4.6-4.6 3-.6 4-1.6 4.6-4.6Z" fill="#fff8d0" class="sparkle"/></g>`;
     }
     default: return '';
@@ -259,7 +267,7 @@ export function mascotSVG(id = 'fox', hatId = 'none', cls = '') {
     + `<clipPath id="${ids.clip}"><path d="${H}"/></clipPath>`;
   return `<svg class="mascot ${cls}" viewBox="0 0 100 100" aria-hidden="true"><defs>${defs}</defs>
     <ellipse cx="50" cy="94.5" rx="24" ry="3.6" fill="#000" opacity=".3"/>
-    ${a.antlers ? antlerPair(35, 37, 65, 37, 0.92) : ''}
+    ${a.antlers ? antlerPair(36, 38, 64, 38, 0.8, null, '#7d6240', 8) : ''}
     ${ears(a, ids)}
     <path d="${H}" fill="url(#${ids.head})"/>
     <g clip-path="url(#${ids.clip})"><path d="${H}" fill="${RIM}" opacity=".55"/><path d="${H}" fill="url(#${ids.head})" transform="translate(-2.6 -3.2)"/>
@@ -271,54 +279,72 @@ export function mascotSVG(id = 'fox', hatId = 'none', cls = '') {
 }
 
 // ---------------------------------------------------------------- moose
-/** The Mivimoose — round, inflatable, facing left. Body group scales via CSS var --puff. */
+/**
+ * The Mivimoose — a round, inflatable moose in three-quarter view, facing left.
+ * What makes it read as a moose: a long Roman-nosed muzzle ending in an overhanging bulb nose,
+ * eyes set high near the antlers, a hairy bell under the chin, a shoulder hump with a mane,
+ * broad scoop-shaped palmate antlers, and long legs with pale stockings and split hooves.
+ * The body group scales with the CSS var --puff; its colour follows --moose-hi / --moose-lo.
+ */
 export function mooseSVG() {
-  const g = nid('mb'), h = nid('mh'), sheen = nid('ms'), mz = nid('mm'), leg = nid('ml'), legFar = nid('mf'), eg = nid('me'), bl = nid('mbl');
+  const id = (p) => nid('m' + p);
+  const g = id('b'), h = id('h'), sheen = id('s'), leg = id('l'), legFar = id('f'), eg = id('e'), bl = id('c'), bulb = id('n'), ear = id('r'), nk = id('k'), ant = id('a'), antFar = id('d');
   const OL = '#2a160c';
-  const L = (cls, x, y, hgt, far) => `<rect class="leg ${cls}" x="${x}" y="${y}" width="10.5" height="${hgt}" rx="5" fill="url(#${far ? legFar : leg})" stroke="${OL}" stroke-width="2.1"/>`;
+  const legPath = (x, top, bot) => `M${x - 6.8} ${top}C${x - 6.6} ${top + 13} ${x - 4.8} ${bot - 15} ${x - 4.2} ${bot - 4.5}L${x + 4.2} ${bot - 4.5}C${x + 4.8} ${bot - 15} ${x + 6.6} ${top + 13} ${x + 6.8} ${top}Z`;
+  const hoof = (x, bot) => `<path d="M${x - 4.4} ${bot - 5}H${x + 4.4}L${x + 5.2} ${bot}Q${x} ${bot + 1.4} ${x - 5.2} ${bot}Z" fill="#1d1009" stroke="${OL}" stroke-width="1.6" stroke-linejoin="round"/><path d="M${x} ${bot - 3.6}V${bot + 0.4}" stroke="#5a3a24" stroke-width="1"/>`;
+  const L = (cls, x, top, bot, far) => `<g class="leg ${cls}"><path d="${legPath(x, top, bot)}" fill="url(#${far ? legFar : leg})" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>${hoof(x, bot)}</g>`;
+  const HEAD = 'M70 38C80 38 86.5 45.5 86.5 54.5C86.5 63 82 71 75.5 77C70 82 63 86.5 55 89C51 90.5 47 94 41.5 95.5C36 96.8 31 95 28 92C22.5 91.5 17.5 86 17.5 78C17.5 69 23.5 62.5 32 61.5C40 60.5 46.5 55 50.5 48.5C54.5 42 61 38 70 38Z';
   return `<svg class="moose-svg" viewBox="0 0 160 150" aria-hidden="true">
     <defs>
-      <radialGradient id="${g}" cx="36%" cy="30%" r="78%"><stop offset="0" style="stop-color:var(--moose-hi,#b07a49)"/><stop offset="1" style="stop-color:var(--moose-lo,#5e3920)"/></radialGradient>
-      ${rad(h, [[0, '#a8724a'], [0.6, '#7d4f2f'], [1, '#5a371f']], '42%', '30%', '80%')}
-      ${rad(sheen, [[0, '#fff', 0.55], [1, '#fff', 0]], '50%', '50%', '50%')}
-      ${lin(mz, '#cf9d6c', '#9a6a41')}
-      <linearGradient id="${leg}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a361d"/><stop offset=".56" stop-color="#4a2c17"/><stop offset=".6" stop-color="#d2b48c"/><stop offset=".84" stop-color="#b99b72"/><stop offset=".86" stop-color="#26150b"/><stop offset="1" stop-color="#1a0e07"/></linearGradient>
-      <linearGradient id="${legFar}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3f2513"/><stop offset=".56" stop-color="#341f10"/><stop offset=".6" stop-color="#a88d69"/><stop offset=".84" stop-color="#937a58"/><stop offset=".86" stop-color="#1c0f07"/><stop offset="1" stop-color="#120904"/></linearGradient>
-      ${rad(eg, [[0, '#0d0806'], [0.55, '#0d0806'], [0.8, '#4a2a14'], [1, '#2a170a']], '50%', '50%', '50%')}
-      ${rad(bl, [[0, '#ff8fa3', 0.55], [1, '#ff8fa3', 0]], '50%', '50%', '50%')}
+      <radialGradient id="${g}" cx="34%" cy="28%" r="80%"><stop offset="0" style="stop-color:var(--moose-hi,#9a643b)"/><stop offset="1" style="stop-color:var(--moose-lo,#5a361d)"/></radialGradient>
+      <linearGradient id="${h}" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5e3820"/><stop offset=".42" stop-color="#7f5130"/><stop offset=".78" stop-color="#a87650"/><stop offset="1" stop-color="#b98a5e"/></linearGradient>
+      ${rad(bulb, [[0, '#e0b285', 0.85], [0.6, '#c49064', 0.35], [1, '#c49064', 0]], '45%', '35%', '55%')}
+      ${rad(sheen, [[0, '#fff', 0.5], [1, '#fff', 0]], '50%', '50%', '50%')}
+      ${rad(nk, [[0, '#1a0c05', 0.4], [1, '#1a0c05', 0]], '50%', '50%', '50%')}
+      <linearGradient id="${leg}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a361d"/><stop offset=".6" stop-color="#432815"/><stop offset=".7" stop-color="#cdb08b"/><stop offset="1" stop-color="#a88b66"/></linearGradient>
+      <linearGradient id="${legFar}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3e2413"/><stop offset=".6" stop-color="#2f1b0e"/><stop offset=".7" stop-color="#a38967"/><stop offset="1" stop-color="#836d4e"/></linearGradient>
+      ${lin(ear, '#7a4c2c', '#4e2f19')}
+      ${lin(ant, '#fbf1d8', '#c9a874')}${lin(antFar, '#e9dbbb', '#b39364')}
+      ${rad(eg, [[0, '#0d0806'], [0.55, '#0d0806'], [0.8, '#5a3216'], [1, '#2a170a']], '50%', '50%', '50%')}
+      ${rad(bl, [[0, '#ff8fa3', 0.5], [1, '#ff8fa3', 0]], '50%', '50%', '50%')}
     </defs>
-    <ellipse class="m-shadow" cx="90" cy="142" rx="46" ry="5.5" fill="#000" opacity=".34"/>
-    <g class="m-legs">${L('l2', 77, 106, 32, true)}${L('l4', 117, 106, 32, true)}${L('l1', 61, 104, 35)}${L('l3', 102, 106, 33)}</g>
+    <ellipse class="m-shadow" cx="96" cy="141" rx="48" ry="5.5" fill="#000" opacity=".34"/>
+    <g class="m-legs">${L('l2', 81, 96, 137, true)}${L('l4', 128, 96, 137, true)}${L('l1', 66, 98, 140)}${L('l3', 115, 98, 140)}</g>
     <g class="m-body">
-      <ellipse cx="141.5" cy="80" rx="6.5" ry="6" fill="#5a3519" stroke="${OL}" stroke-width="2.1"/>
-      <path d="M58 64C62 52 70 46.5 80 47C88 44 96 45.5 102 50C123 50.5 141 65 141 88C141 110.5 121 125 94 125C67 125 47 110.5 47 88C47 78 51 70 58 64Z" fill="url(#${g})" stroke="${OL}" stroke-width="2.4" stroke-linejoin="round"/>
-      <ellipse cx="96" cy="109" rx="31" ry="12.5" fill="#f3d6a8" opacity=".26"/>
-      <path d="M66 53.5q3.5-5.5 8-6.6M75 49.5q3.5-4.5 8-4.6M85 47.5q3.5-3.5 8-2.6" stroke="#3a2010" stroke-width="2" fill="none" stroke-linecap="round" opacity=".55"/>
-      <ellipse cx="79" cy="70" rx="21" ry="11" fill="url(#${sheen})" transform="rotate(-22 79 70)"/>
-      <circle cx="70.5" cy="63.5" r="2.6" fill="#fff" opacity=".6"/>
-      <path d="M137 97C131 114 115 123 95 124" stroke="${RIM}" stroke-width="3" fill="none" stroke-linecap="round" opacity=".55"/>
-      <path class="m-stretch" d="M60 82q6-6 12 0M104 62q6-6 12 0M84 116q6-5 12 0" stroke="#fff" stroke-opacity="0" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <path d="M139.5 69C145 66 150.5 69.5 149 76C147.6 80.5 142.5 80.5 140 77Z" fill="#4a2c17" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M56 74C56 60 64 50 76 47C82 40 94 38 103 44C126 44 143 60 143 81C143 103 126 117 101 117H84C66 117 54 104 54 89C54 83 54.5 78 56 74Z" fill="url(#${g})" stroke="${OL}" stroke-width="2.4" stroke-linejoin="round"/>
+      <ellipse cx="102" cy="104.5" rx="30" ry="10.5" fill="#f0d2a6" opacity=".2"/>
+      <ellipse cx="80" cy="77" rx="17" ry="22" fill="url(#${nk})"/>
+      <path d="M79 49.5q2-5.2 6-6.6M87.5 45.5q2.6-4.6 6.6-5.2M96.5 44.2q3-3.6 7-3.2M105 45.6q3.2-2.6 7-1.8" stroke="#2a1608" stroke-width="2" fill="none" stroke-linecap="round" opacity=".5"/>
+      <ellipse cx="97" cy="62" rx="22" ry="9.5" fill="url(#${sheen})" transform="rotate(-14 97 62)"/>
+      <circle cx="106" cy="57.5" r="2.2" fill="#fff" opacity=".5"/>
+      <path d="M139.5 92C134.5 107.5 121 116 102 117" stroke="${RIM}" stroke-width="3" fill="none" stroke-linecap="round" opacity=".55"/>
+      <path class="m-stretch" d="M104 58q6-6 12 0M124 76q5-5.5 10 0M92 109q6-5 12 0" stroke="#fff" stroke-opacity="0" stroke-width="2" fill="none" stroke-linecap="round"/>
     </g>
     <g class="m-head">
-      <path d="M78 54C84 46 92 42 101 42C97 50.5 90 56 81 58Z" fill="#5d3920" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
-      <path d="M82 53C87 48 92 46 97 45.6C94 50 89 53 84 55Z" fill="#c99872"/>
-      ${antlerPair(52, 43, 71, 40, 1.05, null, '#6e5434', 6)}
-      <path d="M60 86C58 95 56 101 57.4 106.5C61.5 104.5 64.5 98 66.5 87.5Z" fill="#5a361d" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
-      <path d="M66 38C77 38 85 46 85 57C85 68 79 76 71 80L64 86C58 91 50 94 42 94C32 94 22 90 20 82C18 74 22 68 28 64C34 60 40 56 44 50C48 43 56 38 66 38Z" fill="url(#${h})" stroke="${OL}" stroke-width="2.4" stroke-linejoin="round"/>
-      <path d="M44 57.5C38 60 30 63 25.5 68C20.5 73 19.5 81 23 86C27 91 35 93 43 93C50 93 57 90 61 85.5C57 80 53 74 50.5 66C48.6 61.6 46.4 58.6 44 57.5Z" fill="url(#${mz})"/>
-      <path d="M66 38C77 38 85 46 85 57C85 68 79 76 71 80L64 86C58 91 50 94 42 94C32 94 22 90 20 82C18 74 22 68 28 64C34 60 40 56 44 50C48 43 56 38 66 38Z" fill="none" stroke="${OL}" stroke-width="2.4" stroke-linejoin="round"/>
-      <ellipse cx="27.5" cy="71" rx="5.6" ry="2.6" fill="#fff" opacity=".22" transform="rotate(-32 27.5 71)"/>
-      <ellipse cx="65" cy="45.5" rx="9" ry="3.6" fill="#fff" opacity=".14" transform="rotate(-12 65 45.5)"/>
-      <path d="M84 63C82 71 77 77 71 80.5" stroke="${RIM}" stroke-width="2.4" fill="none" stroke-linecap="round" opacity=".5"/>
-      <path d="M44 57C40 52 33 47.5 24 46C27.5 53.5 34 58.5 42 60Z" fill="#6a4226" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
-      <path d="M41 57C37.6 53.6 33 51 28.5 49.6C31 53.8 35 56.8 39.5 58.4Z" fill="#d4a47c"/>
-      <ellipse cx="26.6" cy="80.5" rx="2.6" ry="3.7" fill="#2a160c" transform="rotate(22 26.6 80.5)"/>
-      <ellipse cx="35.8" cy="83.4" rx="1.9" ry="2.9" fill="#2a160c" transform="rotate(10 35.8 83.4)"/>
-      <path class="m-mouth" d="M29.5 89.6C35 92.4 41.5 92.4 48 89.6" stroke="#3a2212" stroke-width="1.9" fill="none" stroke-linecap="round"/>
-      <g class="m-eyes">${eye(57, 58.5, 5.4, eg)}${eye(73.5, 55.5, 4.6, eg)}</g>
-      <path d="M50.5 50.5q5.5-4.2 11-2.2M68.5 47.6q4.5-3.4 9.2-1.4" stroke="#3a2212" stroke-width="1.8" fill="none" stroke-linecap="round"/>
-      <ellipse cx="65" cy="70" rx="5.2" ry="3.3" fill="url(#${bl})"/><ellipse cx="80" cy="64.5" rx="3.6" ry="2.4" fill="url(#${bl})"/>
-      <g class="m-sweat"><path d="M89 42q4.6 6.6 0 9.6q-4.6-3 0-9.6" fill="#a6dcff" stroke="#3a6b8a" stroke-width="1"/><circle cx="87.8" cy="47.6" r="1" fill="#fff"/></g>
+      <path d="M80 46C86 39 94 35 102.5 35C99.5 42.5 92.5 48 83.5 50.5Z" fill="url(#${ear})" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M84 46.2C88.2 42 93.2 39.3 98.4 38.7C95.4 42.8 90.6 45.8 85.6 47.6Z" fill="#c99872"/>
+      ${antler(76, 42, false, 0.94, antFar, '#5f4629', 6)}
+      <path d="M59.5 82C56.5 90 55.5 98 57.6 104C59.4 109.4 66.8 109.6 68.4 104.2C70 98 70.6 90 72 82Z" fill="url(#${ear})" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M60.2 88.5C59.2 94.5 59.4 99.5 61 103.6" stroke="#9a6a44" stroke-width="1.6" fill="none" stroke-linecap="round" opacity=".7"/>
+      <path d="M58.8 106.6l-1.8 3.6M62.4 108.6l-.4 4M66 107.6l1.2 3.6" stroke="${OL}" stroke-width="1.7" stroke-linecap="round"/>
+      <path d="${HEAD}" fill="url(#${h})"/>
+      <ellipse cx="28.6" cy="76" rx="10.4" ry="13" fill="url(#${bulb})"/>
+      <path d="${HEAD}" fill="none" stroke="${OL}" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M48 54.5C42.5 61 36 63 30.5 64" stroke="#3a2010" stroke-width="1.4" fill="none" stroke-linecap="round" opacity=".35"/>
+      <ellipse cx="24.5" cy="68.6" rx="5.2" ry="2.4" fill="#fff" opacity=".3" transform="rotate(-28 24.5 68.6)"/>
+      <ellipse cx="68" cy="43.5" rx="9" ry="3.4" fill="#fff" opacity=".13" transform="rotate(-8 68 43.5)"/>
+      <ellipse cx="23.2" cy="80" rx="2.6" ry="4.2" fill="#24110a" transform="rotate(16 23.2 80)"/>
+      <ellipse cx="32" cy="83.4" rx="2" ry="3.3" fill="#24110a" transform="rotate(6 32 83.4)"/>
+      <path class="m-mouth" d="M27.5 90.6C33.5 93 40.5 92.6 47 89.2" stroke="#3a2010" stroke-width="1.9" fill="none" stroke-linecap="round"/>
+      <path d="M85.5 62C83.5 70 79.5 75 74.5 79" stroke="${RIM}" stroke-width="2" fill="none" stroke-linecap="round" opacity=".3"/>
+      <g class="m-eyes">${eye(59.5, 54, 5.6, eg)}${eye(75, 50.5, 4.5, eg)}</g>
+      <path d="M52.2 46.2q6.2-4.6 12.6-1.6M70.2 43.2q4.8-3.4 9.8-1" stroke="#2e1708" stroke-width="1.9" fill="none" stroke-linecap="round"/>
+      <ellipse cx="67" cy="66.5" rx="5.2" ry="3.2" fill="url(#${bl})"/><ellipse cx="82" cy="60" rx="3.4" ry="2.3" fill="url(#${bl})"/>
+      <path d="M60.5 47C55 40.5 48 35.5 38.5 33.6C41.5 41.8 48 47.6 56.6 51Z" fill="url(#${ear})" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M57.4 47.6C53.6 43 48.8 39.6 43.6 38C46 42.6 50 46 54.6 48.6Z" fill="#d4a47c"/>
+      ${antler(62.5, 42.5, true, 1, ant, '#6e5434', 6)}
+      <g class="m-sweat"><path d="M92 33q4.6 6.6 0 9.6q-4.6-3 0-9.6" fill="#a6dcff" stroke="#3a6b8a" stroke-width="1"/><circle cx="90.8" cy="38.6" r="1" fill="#fff"/></g>
     </g>
   </svg>`;
 }

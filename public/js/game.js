@@ -410,7 +410,8 @@ export class GameView {
     // live tier columns: watch the middle tiers fill up
     $('#gen-tiers').innerHTML = ['kindling', 'trailhead', 'backcountry', 'deepwoods', 'golden'].map((t) =>
       `<div class="gen-col" style="--tc:${tierVar(t)}"><i style="height:${Math.max(4, ((counts[t] || 0) / max) * 100)}%"></i><b>${(counts[t] || 0).toLocaleString()}</b><span>${TIER_ICON[t]}</span></div>`).join('');
-    const src = (d.sources || []).map((s) => (s === 'ai' ? '🧭 AI ranger' : s === 'wikidata' ? '🌐 Wikidata' : s)).join(' + ');
+    const SRC = { ai: '🧭 AI ranger', wikidata: '🌐 Wikidata', wikipedia: '📒 Wikipedia', web: '🌐 web search', approx: '🧭 best guess' };
+    const src = (d.sources || []).map((s) => SRC[s] || s).join(' + ');
     const meta = $('#gen-meta');
     if (meta) meta.textContent = `${src ? src + ' · ' : ''}${d.ms ? (d.ms / 1000).toFixed(1) + 's' : ''}`;
   }
@@ -504,6 +505,7 @@ export class GameView {
     if (!active) {
       m.style.setProperty('--puff', '0');
       m.classList.remove('danger', 'critical');
+      if (this.mooseTinted) { this.mooseTinted = false; m.style.removeProperty('--moose-hi'); m.style.removeProperty('--moose-lo'); }
       this.setTimerText('');
       for (const el of this.seatEls.values()) el.querySelector('.ring').classList.add('hidden');
       return;
@@ -525,9 +527,11 @@ export class GameView {
       m.classList.toggle('critical', remaining < 1200 && !t.paused);
     }
     m.style.setProperty('--puff', puff.toFixed(3));
-    const r = Math.round(176 + (255 - 176) * puff), gg = Math.round(122 - 50 * puff), b = Math.round(74 - 20 * puff);
+    // chocolate brown at rest → flushed red when it's about to poof
+    const r = Math.round(154 + 101 * puff), gg = Math.round(100 - 8 * puff), b = Math.round(59 + 11 * puff);
     m.style.setProperty('--moose-hi', `rgb(${r},${gg},${b})`);
-    m.style.setProperty('--moose-lo', `rgb(${Math.round(109 + 100 * puff)},${Math.round(68 - 30 * puff)},${Math.round(38 - 10 * puff)})`);
+    m.style.setProperty('--moose-lo', `rgb(${Math.round(90 + 110 * puff)},${Math.round(54 - 14 * puff)},${Math.round(29 + puff)})`);
+    this.mooseTinted = true;
     // ring on active seat
     for (const [pid, el] of this.seatEls) {
       const ring = el.querySelector('.ring');
