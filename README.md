@@ -54,11 +54,16 @@ A fast-paced campfire elimination word game for **2–8 campers**. Everyone sits
 
   Every mode uses the same rules for every seat, a random first holder and a fixed clockwise order.
 - **Gimmicks.** Special rounds come every 2–6 rounds, **every round** (every new trail, including when a long trail runs out), or **every turn** (every accepted answer hands the next camper a special round):
-  - **🪓 Leader's Pick.** The camper with the most lives (ties: most points) types any category, and it's generated on the fly. They get 40 seconds by default. Generation starts while they're still typing.
+  - **🪓 Leader's Pick.** A camper types any category, and it's generated on the fly. Who carves is a room rule:
+    - **Most lives** (default; ties go to most points). A crown marks the leader.
+    - **Take turns.** Every camper carves in seat order, skipping anyone who's out. An axe marks who's next.
+    - **Random.** The ranger draws a name.
+
+    They get 40 seconds by default, and generation starts while they're still typing.
   - **📣 Echo Trail.** The last answer guessed seeds a related next category. That category is pre-computed while the previous round is still being played. On "every turn", each answer branches the trail again, so the category changes with every pass of the moose.
 - **A distinctive look, drawn entirely in code.** No image files or emoji fonts:
   - **Dusk Ranger** style: an indigo night with ember light, 70s sunset stripes, paper grain and topographic contour lines on the cards.
-  - **Art:** shaded storybook mascots with a campfire rim light, the Mivimoose (snout, bell and wide palmate antlers), a campfire with layered flames, mossy stumps, and a moonlit lake under three rows of pines.
+  - **Art:** shaded storybook mascots with a campfire rim light, the Mivimoose (snout, bell and wide palmate antlers — and it's alive: it blinks, twitches its ears, wags its tail and nods while it waits; its blush deepens as it puffs; worried brows and a nervous mouth on a low fuse; wide eyes just before it pops), a campfire with layered flames, mossy stumps, and a moonlit lake under three rows of pines.
   - **Campsite emblem** on the home page; matching favicon.
   - **Icons:** one duotone line set; emoji from the server and UI are swapped for it automatically.
   - **Type:** Fraunces for display and Manrope for the interface.
@@ -66,11 +71,15 @@ A fast-paced campfire elimination word game for **2–8 campers**. Everyone sits
 - **📒 Field Guide (custom questions):**
   - **Generate any category** you type, with all five tiers.
   - **Type a topic** and get a **whole question bank**. Categories stream in, and a lobby can start playing after the first few.
-  - **Browse and search the full Krillion archive** and Campfire Classics.
+  - **Browse and search the full Krillion archive**, Campfire Classics and generated trails.
+    - **Simple search** ranks by relevance, shrugs off typos ("pokmon") and matches as you type ("taylor sw").
+    - **Advanced search** finds every trail that has an answer ("Pikachu" → 8 trails, with its tier on each), plus a minimum size and sorting by best match, newest, most or fewest answers. The answer index is built in the background and kept compact (one string per trail).
   - **Hand-write** your own tiers.
   - Import and export as JSON.
 - **⚙️ Custom campsite rules (lobby → "More campsite rules"):**
+  - **Who carves the trail** (Leader's Pick): most lives, take turns, or random.
   - **Leader's Pick time:** 15–90 s.
+  - **Game length:** play to the last camper standing (default), or end after 1–30 rounds. Standings go by lives, then points, and campers level on both share the win.
   - **Custom-trail length:** Leader's Pick, Echo and generated categories move on to a fresh trail after N answers (default 14, ∞ = until a poof).
   - **Every-trail length:** the same limit, for every category.
   - **Easiest tier that counts:** Auto, All, No Kindling or Backcountry+.
@@ -98,7 +107,9 @@ Every typed category (Leader's Pick, Echo Trail, duel trails, the Field Guide) t
    - **Tiers.** Tiers follow fame percentiles. They are gentler while only the popular pass is in, and re-tiering only ever moves an answer to a more common tier. Deep Woods only keeps items that at least two Wikipedias cover.
    - **Engines.** Bulk lists use QLever, with the official Wikidata Query Service racing it. An engine that rate-limits (HTTP 429) is left alone for a while, and the other one takes over.
 3. **The hunt: Wikipedia.** This runs alongside Wikidata when there's no key (`server/hunt.js`), and merges into Claude's category when there is one:
-   - **Wikipedia categories** ("Category:Goat breeds", plus relevant subcategories when the main one is thin) and **"List of …" pages**. List entries are kept only if their own page description fits the question.
+   - **Lists that are the category.** A "List of …" page is used only when its title is the category exactly ("List of goat breeds", "List of Pixar films" for "Pixar movie", "List of songs by Taylor Swift") or almost exactly (one extra word, like a regional list, which only fills in). An exact list is always read, and it also runs alongside Claude. Loosely related lists ("films about cheese") are never used, and broad questions never use lists.
+   - **Wikipedia categories** ("Category:Goat breeds", plus relevant subcategories when the main one is thin). List entries are kept only if their own page description fits the question.
+   - **The nichest answer, early.** The Golden Antler is placed as soon as readership or the first Wikidata pass is in, then moves deeper if something nicher turns up.
    - **Fame from real readership.** Every answer is ranked by its Wikipedia page's monthly readers, so Kindling is what people actually know (Boer, Angora and Saanen for goat breeds).
    - **Deep search** when the quick pass is thin:
      - re-phrasings ("breed of goat" → "goat breed", plurals, "movie" → "film");
@@ -129,6 +140,18 @@ Every typed category (Leader's Pick, Echo Trail, duel trails, the Field Guide) t
 **Ranger checks** cover answers missing from a generated list:
 
 - Wikidata, Wikipedia (both free) and Claude race each other, and the first "valid" wins.
+- **Built to keep working when Wikimedia is busy.** Wikipedia and Wikidata's API sometimes rate-limit a server, so the ranger finds names five ways at once:
+  - Wikidata's search API;
+  - the same alias-aware search run **server-side through the query service** (unaffected by this server's API limits);
+  - an exact label-and-alias lookup ("sax", "T. rex");
+  - Wikipedia's search, with the category as context ("up" + "Pixar film" → Up), its "did you mean" and redirect nicknames;
+  - **spelling help from Datamuse**, which isn't Wikimedia at all ("dachsund" → dachshund, "bald egle" → bald eagle, "rembrant" → Rembrandt).
+
+  Each source gets about 1.8 s, so a slow one can't hold the verdict up.
+- **A fast lane.** For direct classes (dog breeds, countries, painters), a full-text search restricted to the class runs in parallel: "lab" among dog breeds → Labrador Retriever in about 0.2–0.4 s. An obscure namesake found this way (a painting called "Piano") only stands if the broad check finds nothing better.
+- **Evidence.** An answer counts if its description fits, it's a member of the class, it's among the entity's works, or its Wikipedia categories say so ("Up" sits in "Pixar animated films", even though Wikidata lacks the link). Category evidence needs the class as the category's head noun, so "Musical instrument parts and accessories" doesn't make a microphone an instrument.
+- **No namesake tricks.** If what you typed is, word for word, someone famous outside the category, a near-miss namesake inside it doesn't count. "shakespeare" isn't the painter Dorothy Shakespear.
+- **Remembered verdicts.** Rulings the ranger is sure of are saved to `data/judge-cache.json`, so a repeated answer is instant across games and restarts. A rejection counts as sure only when every source really answered, so a timeout or rate limit is never remembered as "wrong".
 - **On hunted trails**, an unlisted answer counts if its Wikipedia page sits in one of the trail's Wikipedia categories or its description fits the question. On approximate trails, the answer's own associations must point back at the question's concept. A seashell's associations include "beach"; "red" is one of the first words used to describe a strawberry, but not a banana.
 - The Wikidata check finds the item by name, then:
   - **Description check.** "eagle: large carnivorous bird" ✓ for birds. This catches common names that aren't formal members of the class.
@@ -145,6 +168,7 @@ The default model is `claude-opus-5-5` at low effort, with server-side refusal f
 | `MIVI_AI_FAST=1` | Opus fast mode (premium pricing) |
 | `MIVI_AI_MODEL` | Model used for generation |
 | `MIVI_AI_SLICE_MODEL` | Optional faster model for the bulk letter-range streams |
+| `MIVI_AI_JUDGE_MODEL` | Optional faster model for live referee calls (the ranger's Claude checks) |
 | `MIVI_AI_CONCURRENCY` | Parallel streams (default 16) |
 | `MIVI_AI_WAVES` | Extra in-play search waves (default 1) |
 | `MIVI_QLEVER_URL` | Alternative Wikidata SPARQL engine |

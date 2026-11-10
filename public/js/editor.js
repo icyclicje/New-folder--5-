@@ -238,18 +238,31 @@ export function openFieldGuide({ forRoom = false } = {}) {
         render();
       });
     } else if (tab === 'archive') {
-      pane.innerHTML = `<div class="fg-row"><input id="k-q" placeholder="Search every Krillion daily…" value="${esc(kFilter.q)}" autocomplete="off">
+      kFilter.answer ??= ''; kFilter.min ??= ''; kFilter.sort ??= 'best'; kFilter.adv ??= false;
+      pane.innerHTML = `<div class="fg-row"><input id="k-q" placeholder="Search the archive — typos are fine…" value="${esc(kFilter.q)}" autocomplete="off">
         <span class="seg"><button data-ks="krillion" class="${kFilter.source === 'krillion' ? 'sel' : ''}">🗺️ Krillion</button><button data-ks="campfire" class="${kFilter.source === 'campfire' ? 'sel' : ''}">🏕️ Campfire</button><button data-ks="ai" class="${kFilter.source === 'ai' ? 'sel' : ''}">🧭 Generated</button></span>
+        <button class="btn btn-small btn-ghost" id="k-adv" aria-expanded="${kFilter.adv}">⚙️ Advanced</button>
         <button class="btn btn-small btn-moss" id="k-rand">＋ 10 random</button></div>
+        <div class="k-adv ${kFilter.adv ? '' : 'hidden'}" id="k-adv-panel">
+          <label class="field"><span>Has the answer</span><input id="k-ans" placeholder="e.g. Pikachu — find every trail it's on" value="${esc(kFilter.answer)}" autocomplete="off"></label>
+          <label class="field"><span>At least</span><input id="k-min" type="text" inputmode="numeric" placeholder="any" value="${esc(kFilter.min)}" autocomplete="off"></label>
+          <label class="field"><span>Sort</span><select id="k-sort">${[['best', 'Best match'], ['newest', 'Newest'], ['most', 'Most answers'], ['fewest', 'Fewest answers']].map(([v, l]) => `<option value="${v}" ${kFilter.sort === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        </div>
+        <div class="k-meta muted" id="k-meta"></div>
         <ul class="k-list" id="k-list"><li class="muted">Unrolling the map…</li></ul>`;
+      let seq = 0;
       const load = async () => {
-        if (!kFilter.list || kFilter.list.source !== kFilter.source) {
-          kFilter.list = { source: kFilter.source, items: await fetch('/api/prompts?source=' + kFilter.source).then((r) => r.json()).catch(() => []) };
-        }
-        const q = kFilter.q.toLowerCase();
-        const items = kFilter.list.items.filter((x) => !q || x.prompt.toLowerCase().includes(q)).slice(0, 300);
+        const my = ++seq;
+        const params = new URLSearchParams({ source: kFilter.source, q: kFilter.q, sort: kFilter.sort });
+        if (kFilter.adv && kFilter.answer.trim()) params.set('answer', kFilter.answer.trim());
+        if (kFilter.adv && /^\d+$/.test(String(kFilter.min).trim())) params.set('min', String(kFilter.min).trim());
+        const res = await fetch('/api/search?' + params).then((r) => r.json()).catch(() => ({ results: [] }));
+        if (my !== seq) return; // a newer search is on its way
+        kFilter.list = { source: kFilter.source, items: res.results || [] };
+        const items = kFilter.list.items;
         const have = new Set(sel().categories.filter((c) => c.ref).map((c) => c.ref));
-        $('#k-list', pane).innerHTML = items.map((x) => `<li><span>${esc(x.prompt)}<br><small>${x.date ? x.date + ' · ' : ''}${x.total.toLocaleString()} answers</small></span>${have.has(x.id) ? '<small>✔ added</small>' : `<button class="btn btn-small btn-moss" data-add="${esc(x.id)}">＋</button>`}</li>`).join('') || '<li class="muted">No trails match.</li>';
+        $('#k-meta', pane).textContent = res.indexing ? 'Indexing every answer in the archive — try again in a few seconds.' : (kFilter.q || (kFilter.adv && kFilter.answer)) ? `${(res.total ?? items.length).toLocaleString()} trail${res.total === 1 ? '' : 's'} found${res.total > items.length ? ` · showing the best ${items.length}` : ''}` : '';
+        $('#k-list', pane).innerHTML = items.map((x) => `<li><span>${esc(x.prompt)}<br><small>${x.date ? x.date + ' · ' : ''}${x.total.toLocaleString()} answers${x.match ? ` · <b class="k-hit" style="--tc:var(--t-${x.matchTier})">${esc(x.match)}</b> (${x.matchTier === 'golden' ? 'Golden Antler' : x.matchTier})` : ''}</small></span>${have.has(x.id) ? '<small>✔ added</small>' : `<button class="btn btn-small btn-moss" data-add="${esc(x.id)}">＋</button>`}</li>`).join('') || '<li class="muted">No trails match.</li>';
         $$('[data-add]', pane).forEach((b) => b.addEventListener('click', () => {
           sfx.click();
           const x = kFilter.list.items.find((i) => i.id === b.dataset.add);
@@ -258,7 +271,12 @@ export function openFieldGuide({ forRoom = false } = {}) {
         }));
       };
       let qt = null;
-      $('#k-q', pane).addEventListener('input', (e) => { kFilter.q = e.target.value; clearTimeout(qt); qt = setTimeout(load, 150); });
+      const soon = () => { clearTimeout(qt); qt = setTimeout(load, 180); };
+      $('#k-q', pane).addEventListener('input', (e) => { kFilter.q = e.target.value; soon(); });
+      $('#k-ans', pane).addEventListener('input', (e) => { kFilter.answer = e.target.value; soon(); });
+      $('#k-min', pane).addEventListener('input', (e) => { kFilter.min = e.target.value.replace(/\D/g, ''); soon(); });
+      $('#k-sort', pane).addEventListener('change', (e) => { kFilter.sort = e.target.value; load(); });
+      $('#k-adv', pane).addEventListener('click', () => { sfx.click(); kFilter.adv = !kFilter.adv; $('#k-adv-panel', pane).classList.toggle('hidden', !kFilter.adv); $('#k-adv', pane).setAttribute('aria-expanded', kFilter.adv); load(); });
       $$('[data-ks]', pane).forEach((b) => b.addEventListener('click', () => { sfx.click(); kFilter.source = b.dataset.ks; renderPane(); }));
       $('#k-rand', pane).addEventListener('click', () => {
         sfx.click();

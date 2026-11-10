@@ -74,7 +74,7 @@ const GIMMICKS = {
   leaderpick: {
     name: "Leader's Pick",
     icon: '🪓',
-    desc: 'On each special round the camper with the most lives (ties: most points) carves a brand-new category onto the trail sign — answers are generated on the fly.',
+    desc: 'On each special round a camper carves a brand-new category onto the trail sign — the one with the most lives, everyone in turn, or someone at random (your call) — and answers are generated on the fly.',
   },
   echotrail: {
     name: 'Echo Trail',
@@ -107,6 +107,8 @@ const DEFAULT_SETTINGS = {
   customPack: null,
   // --- custom campsite rules ---
   pickSec: 40, // Leader's Pick: seconds to carve a custom category
+  roundLimit: 0, // game length: 0 = last camper standing, N = the game ends after round N (standings by lives, then points)
+  pickBy: 'leader', // Leader's Pick: who carves — leader (most lives) | rotate (everyone takes turns) | random
   genTrailMax: 14, // custom / generated trails move on after this many answers (0 = until a poof)
   trailMax: 0, // EVERY trail moves on after this many answers (0 = until a poof)
   tierFloor: 'auto', // auto (mode decides) | kindling | trailhead | backcountry — the most common tier that still counts
@@ -121,6 +123,7 @@ const DEFAULT_SETTINGS = {
 const SETTING_RANGES = {
   pickSec: [15, 90, 5],
   genTrailMax: [0, 40, 2],
+  roundLimit: [0, 30, 1],
   trailMax: [0, 40, 2],
 };
 

@@ -453,6 +453,8 @@ input:focus, textarea:focus, select:focus { border-color: rgba(255, 195, 92, .7)
 .hud .pill b { color: var(--amber); font-variant-numeric: tabular-nums; }
 .hud .hud-radio { display: none; }
 .hud .duel-pill { border-color: rgba(255, 160, 100, .45); color: var(--text); }
+.hud .hud-end { cursor: pointer; color: var(--text-2); transition: color .15s, border-color .15s, background .15s; }
+.hud .hud-end:hover { color: var(--text); border-color: var(--line-3); background: rgba(30, 30, 70, .8); }
 
 /* arena */
 .arena { position: relative; flex: 1; min-height: 300px; }
@@ -544,6 +546,25 @@ input:focus, textarea:focus, select:focus { border-color: rgba(255, 195, 92, .7)
 .moose.flip .moose-inner { transform: scaleX(-1); }
 .moose .m-body { transform-box: fill-box; transform-origin: 50% 70%; transform: scale(calc(1 + var(--puff) * .5)); transition: transform .12s linear; }
 .moose .m-head { transform-box: fill-box; transform-origin: 70% 90%; }
+/* a living moose: it blinks, twitches its ears, wags its tail and nods while it waits */
+.moose-svg .m-eyes { transform-box: fill-box; transform-origin: 50% 55%; animation: mBlink 5.2s infinite; }
+@keyframes mBlink { 0%, 91%, 97%, 100% { transform: scaleY(1); } 94% { transform: scaleY(.08); } }
+.moose-svg .m-ear { transform-box: fill-box; animation: mEar 6.5s ease-in-out infinite; }
+.moose-svg .m-ear-near { transform-origin: 90% 85%; }
+.moose-svg .m-ear-far { transform-origin: 10% 85%; animation-delay: -2.2s; }
+@keyframes mEar { 0%, 84%, 100% { transform: rotate(0); } 88% { transform: rotate(-9deg); } 92% { transform: rotate(4deg); } }
+.moose-svg .m-tail { transform-box: fill-box; transform-origin: 0% 40%; animation: mTail 1.6s ease-in-out infinite; }
+@keyframes mTail { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(10deg); } }
+.moose:not(.running):not(.danger) .m-head { animation: mNod 3.4s ease-in-out infinite; }
+@keyframes mNod { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-2.5deg); } }
+/* feelings: the blush deepens as it puffs; low fuse = worried brows + a nervous mouth; about to pop = wide eyes */
+.moose .m-blush { opacity: calc(.45 + var(--puff, 0) * .9); }
+.moose-svg .m-brow-hot, .moose-svg .m-mouth-hot { opacity: 0; transition: opacity .2s; }
+.moose-svg .m-brow, .moose-svg .m-mouth { transition: opacity .2s; }
+.moose.danger .m-brow, .moose.danger .m-mouth { opacity: 0; }
+.moose.danger .m-brow-hot, .moose.danger .m-mouth-hot { opacity: 1; }
+.moose.critical .m-eyes { animation: none; transform: scale(1.18); }
+.moose.danger .m-tail { animation-duration: .35s; }
 .moose.danger .m-stretch { stroke-opacity: .5; }
 .moose.running .leg { animation: leg .18s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: top center; }
 .moose.running .leg.l2, .moose.running .leg.l4 { animation-direction: alternate-reverse; }
@@ -670,6 +691,9 @@ input:focus, textarea:focus, select:focus { border-color: rgba(255, 195, 92, .7)
 .tab-body { display: none; flex: 1; min-height: 0; padding: 10px; overflow: hidden; flex-direction: column; }
 .tab-body.active { display: flex; }
 .tab-body .chat-dock { flex: 1; min-height: 0; }
+.sidebar-foot { display: flex; justify-content: flex-end; padding: 0 10px 10px; }
+.sidebar-foot .btn { color: var(--text-2); }
+.sidebar-foot .btn:hover { color: var(--text); }
 .tab-body .chat-list { max-height: none; }
 .trail-log { list-style: none; margin: 0; padding: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .trail-log li { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; padding: 6px 10px; border-radius: var(--r-sm); background: rgba(255, 255, 255, .035); border-left: 3px solid var(--tc); font-size: .85rem; }
@@ -768,6 +792,11 @@ input:focus, textarea:focus, select:focus { border-color: rgba(255, 195, 92, .7)
 .preview-tiers div { font-size: .82rem; line-height: 1.45; padding: 7px 10px; border-radius: var(--r-sm); background: rgba(255, 255, 255, .035); border-left: 3px solid var(--tc); color: var(--text-2); }
 .preview-tiers div b { color: var(--tc); }
 .preview-tiers div .ic { color: var(--tc); }
+.k-adv { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px; margin-top: 8px; padding: 10px 12px 4px; border-radius: var(--r); background: rgba(255, 255, 255, .03); border: 1px dashed var(--line-2); }
+.k-adv .field { margin: 0 0 6px; }
+.k-meta { font-size: .78rem; margin-top: 8px; min-height: 1em; }
+.k-hit { color: var(--tc); }
+@media (max-width: 620px) { .k-adv { grid-template-columns: 1fr 1fr; } .k-adv .field:first-child { grid-column: 1 / -1; } }
 .k-list { list-style: none; margin: 10px 0 0; padding: 0; max-height: 300px; overflow-y: auto; display: grid; gap: 4px; }
 .k-list li { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-sm); background: rgba(255, 255, 255, .035); font-size: .86rem; }
 .k-list li small { color: var(--text-3); }

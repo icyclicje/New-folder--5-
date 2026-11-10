@@ -327,9 +327,11 @@ function renderSettings(isHost) {
         ${!app.room.quick ? `<div class="set-row"><label>Public campfire<small>list on the trailhead board</small></label>${toggle('isPublic', s.isPublic, dis)}</div>` : ''}
       </div>
       <details class="set-group more-rules" ${app.moreRulesOpen ? 'open' : ''}><summary><h4>⚙️ More campsite rules</h4></summary>
-        ${s.gimmick === 'leaderpick' ? `<div class="set-row"><label>Leader's Pick time<small>seconds to carve a custom category</small></label>${stepper('pickSec', s.pickSec, rg.pickSec[0], rg.pickSec[1], rg.pickSec[2], 's', dis)}</div>` : ''}
+        ${s.gimmick === 'leaderpick' ? `<div class="set-row"><label>Who carves the trail<small>${{ rotate: 'every camper takes a turn, in seat order', random: 'the ranger draws a random camper each time' }[s.pickBy] || 'the camper with the most lives (ties: most points)'}</small></label><span class="seg">${[['leader', '👑 Most lives'], ['rotate', '🔁 Take turns'], ['random', '🎲 Random']].map(([v, l]) => `<button class="${(s.pickBy || 'leader') === v ? 'sel' : ''}" data-pickby="${v}" ${dis ? 'disabled' : ''}>${l}</button>`).join('')}</span></div>
+        <div class="set-row"><label>Leader's Pick time<small>seconds to carve a custom category</small></label>${stepper('pickSec', s.pickSec, rg.pickSec[0], rg.pickSec[1], rg.pickSec[2], 's', dis)}</div>` : ''}
         <div class="set-row"><label>Custom-trail length<small>Leader's Pick, Echo and generated categories move on after this many answers</small></label>${stepper('genTrailMax', s.genTrailMax, rg.genTrailMax[0], rg.genTrailMax[1], rg.genTrailMax[2], '', dis, '∞')}</div>
         <div class="set-row"><label>Every-trail length<small>move on from ANY category after this many answers</small></label>${stepper('trailMax', s.trailMax, rg.trailMax[0], rg.trailMax[1], rg.trailMax[2], '', dis, '∞')}</div>
+        <div class="set-row"><label>Game length<small>${s.roundLimit ? `the game ends after round ${s.roundLimit} — standings by lives, then points` : 'play until one camper is left standing'}</small></label>${stepper('roundLimit', s.roundLimit || 0, (rg.roundLimit || [0, 30, 1])[0], (rg.roundLimit || [0, 30, 1])[1], (rg.roundLimit || [0, 30, 1])[2], ' rounds', dis, 'Last standing')}</div>
         <div class="set-row"><label>Easiest tier that counts<small>Auto follows the game mode</small></label><span class="seg">${[['auto', 'Auto'], ['kindling', '🪵 All'], ['trailhead', '🥾 No Kindling'], ['backcountry', '🏕️ Backcountry+']].map(([v, l]) => `<button class="${s.tierFloor === v ? 'sel' : ''}" data-floor="${v}" ${dis ? 'disabled' : ''}>${l}</button>`).join('')}</span></div>
         <div class="set-row"><label>Moose path<small>where the moose runs after a good answer</small></label><span class="seg">${[['clockwise', '🔁 Clockwise'], ['random', '🎲 Random']].map(([v, l]) => `<button class="${s.moosePath === v ? 'sel' : ''}" data-path="${v}" ${dis ? 'disabled' : ''}>${l}</button>`).join('')}</span></div>
         <div class="set-row"><label>Golden Antler heals<small>finding the Golden Antler restores a lost life</small></label>${toggle('goldenLife', s.goldenLife, dis)}</div>
@@ -355,6 +357,7 @@ function renderSettings(isHost) {
   $$('[data-typo]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ typoTolerance: b.dataset.typo })));
   $$('[data-floor]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ tierFloor: b.dataset.floor })));
   $$('[data-path]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ moosePath: b.dataset.path })));
+  $$('[data-pickby]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ pickBy: b.dataset.pickby })));
   $$('[data-toggle]', root).forEach((b) => b.addEventListener('click', () => sendSettings({ [b.dataset.toggle]: !s[b.dataset.toggle] })));
   $('#btn-pick-pack', root)?.addEventListener('click', () => { sfx.click(); openFieldGuide({ forRoom: true }); });
   const duelForm = $('#duel-form', root);

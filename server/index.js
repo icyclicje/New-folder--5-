@@ -41,6 +41,8 @@ const profiles = new ProfileStore(DATA_DIR);
 const krillion = new KrillionBank(DATA_DIR, log);
 const ai = new AIGen({ dataDir: DATA_DIR, log });
 const questions = new QuestionService({ krillion, ai, bankDir: path.join(__dirname, 'data', 'bank'), log });
+// the ranger remembers settled verdicts across restarts (repeated answers are instant, and Wikimedia is spared)
+require('./wikidata').useJudgeStore(path.join(DATA_DIR, 'judge-cache.json'));
 
 const app = express();
 app.disable('x-powered-by');
@@ -79,6 +81,19 @@ app.get('/api/prompts', (req, res) => {
   let list = q ? questions.suggest(q, 40) : questions.allSummaries();
   if (source) list = list.filter((s) => s.source === source);
   res.json(list.slice(0, q ? 40 : 2000).map(({ id, prompt, total, source: src, date }) => ({ id, prompt, total, source: src, date })));
+});
+
+app.get('/api/search', async (req, res) => {
+  const num = (v, d) => (Number.isFinite(Number(v)) && v !== '' && v != null ? Number(v) : d);
+  const out = await questions.searchArchive({
+    q: cleanText(String(req.query.q || ''), 80),
+    answer: cleanText(String(req.query.answer || ''), 60),
+    source: ['krillion', 'campfire', 'ai'].includes(req.query.source) ? req.query.source : '',
+    min: num(req.query.min, 0),
+    max: num(req.query.max, Infinity),
+    sort: ['best', 'newest', 'most', 'fewest'].includes(req.query.sort) ? req.query.sort : 'best',
+  }).catch(() => ({ results: [] }));
+  res.json(out);
 });
 
 app.get('/api/category/:id', (req, res) => {
@@ -240,6 +255,13 @@ io.on('connection', (socket) => {
     const r = room();
     if (!r || !profile) return ack({ ok: false });
     ack(r.startGame(profile.id));
+  });
+
+  socket.on('room:end', (_d, ack) => {
+    ack = ackSafe(ack);
+    const r = room();
+    if (!r || !profile) return ack({ ok: false });
+    ack(r.endEarly(profile.id));
   });
 
   socket.on('room:kick', (data = {}) => {

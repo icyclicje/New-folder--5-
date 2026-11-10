@@ -50,6 +50,7 @@ function normalizeSettings(input, prev = DEFAULT_SETTINGS) {
   for (const [k, [lo, hi]] of Object.entries(SETTING_RANGES)) if (i[k] != null && Number.isFinite(Number(i[k]))) s[k] = clamp(Math.round(Number(i[k])), lo, hi);
   if (['auto', 'kindling', 'trailhead', 'backcountry'].includes(i.tierFloor)) s.tierFloor = i.tierFloor;
   if (['clockwise', 'random'].includes(i.moosePath)) s.moosePath = i.moosePath;
+  if (['leader', 'rotate', 'random'].includes(i.pickBy)) s.pickBy = i.pickBy;
   for (const k of ['goldenLife', 'showTyping', 'revealLeftovers', 'liveHints']) if (i[k] != null) s[k] = !!i[k];
   if (s.mode === 'lonewolf') { s.lives = 1; s.extraLives = false; }
   if (s.mode === 'duel') { s.maxPlayers = 2; s.gimmick = 'none'; s.extraLives = false; }
@@ -395,7 +396,7 @@ class Room {
     this._prejudgeT = setTimeout(() => {
       if (this.game !== g || g.turn !== turn || g.stage !== 'turn') return;
       if (this.matchSafe(text)) return; // already on the list
-      const limit = this.hub.ai.enabled ? 4 : 6; // Wikidata checks are free (but rate-limited); Claude checks cost a little
+      const limit = 5; // free checks are rate-limited by Wikimedia, Claude checks cost a little — settled ones are remembered
       turn.prejudged = (turn.prejudged || 0) + 1;
       if (turn.prejudged > limit) return;
       const cat = g.category;
@@ -733,6 +734,12 @@ class Room {
     g.nextHolder = this.nextAlive(p.id);
     g.intermissionEndsAt = Date.now() + POP_PAUSE_MS;
     const duel = this.isDuel();
+    if (this.settings.roundLimit && g.round > this.settings.roundLimit && !duel && !g.ranked) {
+      this.sys(`🌙 That was the last of ${this.settings.roundLimit} rounds — the fire's burning low.`, 'game');
+      this.emitState();
+      this.setT(() => { if (this.game === g) this.finishOnStandings('rounds'); }, POP_PAUSE_MS);
+      return;
+    }
     const N = this.settings.specialEvery;
     const special = !duel && this.settings.gimmick !== 'none' && (N <= 1 || (g.round - 1) % N === 0);
     if (special && this.settings.gimmick === 'echotrail') this.prepareEcho(); // start right away, during the pause
@@ -798,6 +805,24 @@ class Room {
     return alive[0]?.id;
   }
 
+  /**
+   * Who carves the next Leader's Pick trail: the camper in the lead, everyone in turn (seat order, skipping
+   * anyone who's out), or a random camper — the room's choice.
+   */
+  pickerId() {
+    const g = this.game;
+    const alive = this.aliveIds();
+    if (!alive.length) return null;
+    if (this.settings.pickBy === 'random') return pick(alive);
+    if (this.settings.pickBy === 'rotate') {
+      const n = g.order.length;
+      const last = g.lastPicker ? g.order.indexOf(g.lastPicker) : -1;
+      for (let k = 1; k <= n; k++) { const id = g.order[(last + k + n) % n]; if (alive.includes(id)) return id; }
+      return alive[0];
+    }
+    return this.leaderId();
+  }
+
   /** Is there a clear leader right now (more lives, or same lives and more points, than the runner-up)? */
   clearLeader() {
     const alive = this.aliveIds().map((id) => this.players.get(id)).sort((a, b) => b.lives - a.lives || b.score - a.score);
@@ -809,14 +834,18 @@ class Room {
   beginSpecial() {
     const g = this.game;
     if (this.settings.gimmick === 'leaderpick') {
-      const leaderId = this.leaderId();
+      const leaderId = this.pickerId();
+      g.lastPicker = leaderId;
       const suggestions = this.hub.questions.suggest('', 6).map((s) => s.prompt);
       const pickMs = this.settings.pickSec * 1000;
       g.stage = 'picking';
       g.special = { type: 'leaderpick', leaderId, deadline: Date.now() + pickMs, totalMs: pickMs, suggestions, specCount: 0, specText: null };
       const leader = this.players.get(leaderId);
-      this.sys(`🪓 Special round! ${leader?.name} has the most lives and gets to carve the next trail sign.`, 'game');
-      this.emitEv('special', { kind: 'leaderpick', leaderId, deadline: pickMs, totalMs: pickMs, suggestions });
+      const why = this.settings.pickBy === 'rotate' ? `it's ${leader?.name}'s turn to carve the next trail sign`
+        : this.settings.pickBy === 'random' ? `the ranger drew ${leader?.name}'s name — they carve the next trail sign`
+          : `${leader?.name} has the most lives and gets to carve the next trail sign`;
+      this.sys(`🪓 Special round! ${why.charAt(0).toUpperCase() + why.slice(1)}.`, 'game');
+      this.emitEv('special', { kind: 'leaderpick', leaderId, pickBy: this.settings.pickBy, deadline: pickMs, totalMs: pickMs, suggestions });
       this.emitState();
       g.special.timer = this.setT(() => this.autoLeaderPick(), pickMs);
       if (leader?.isBot) this.setT(() => { if (g.stage === 'picking' && g.special?.leaderId === leaderId) this.handleLeaderPick(leaderId, pick(suggestions)); }, 2600);
@@ -971,7 +1000,42 @@ class Room {
   }
 
   // ---------------- game: end ----------------
-  endGame(winnerId, { tie = false } = {}) {
+  /**
+   * The host calls it a night (or the room's round limit is reached): everyone still standing is ranked by
+   * lives, then points. A shared top spot shares the win. Ranked games always play to the last camper.
+   */
+  endEarly(pid) {
+    const g = this.game;
+    if (!g || this.phase !== 'playing' || g.stage === 'over') return { ok: false, error: 'No campfire is burning.' };
+    if (pid !== this.hostId) return { ok: false, error: 'Only the camp counselor can end the game.' };
+    if (this.quick || g.ranked) return { ok: false, error: 'Ranked games play to the last camper standing.' };
+    const by = this.players.get(pid);
+    this.sys(`🌙 ${by?.name || 'The camp counselor'} called it a night.`, 'game');
+    this.finishOnStandings('host');
+    return { ok: true };
+  }
+
+  finishOnStandings(reason) {
+    const g = this.game;
+    if (!g || g.stage === 'over') return;
+    this.clearT(g.turnTimer);
+    this.clearT(g.special?.timer);
+    this.clearT(g.special?.specTimer);
+    const standing = this.aliveIds().map((id) => this.players.get(id)).sort((a, b) => b.lives - a.lives || b.score - a.score);
+    let place = 0;
+    standing.forEach((p, i) => {
+      const prev = standing[i - 1];
+      if (!prev || prev.lives !== p.lives || prev.score !== p.score) place = i + 1;
+      p.placement = place; // equal lives and points share a place
+    });
+    const top = standing.filter((p) => p.placement === 1);
+    const winner = top.length === 1 ? top[0] : null;
+    if (winner) this.sys(`🏆 ${winner.name} wins on the standings — ${winner.lives} ${winner.lives === 1 ? 'life' : 'lives'}, ${winner.score} points${reason === 'rounds' ? ' after the last round' : ''}.`, 'game');
+    else if (top.length > 1) this.sys(`🤝 ${top.map((p) => p.name).join(' & ')} share the win — dead level on lives and points.`, 'game');
+    this.endGame(winner?.id || null, { tie: top.length > 1, standings: true });
+  }
+
+  endGame(winnerId, { tie = false, standings = false } = {}) {
     const g = this.game;
     if (!g || g.stage === 'over') return;
     this.clearT(g.turnTimer);
@@ -980,7 +1044,7 @@ class Room {
     const winner = winnerId ? this.players.get(winnerId) : null;
     if (winner) { winner.placement = 1; }
     const parts = g.order.map((id) => this.players.get(id)).filter(Boolean);
-    if (tie) for (const p of parts) if (p.alive) p.placement = 1; // everyone still standing shares the win
+    if (tie && !standings) for (const p of parts) if (p.alive) p.placement = 1; // everyone still standing shares the win
     for (const p of parts) if (p.placement == null) p.placement = parts.length;
     const humans = parts.filter((p) => !p.isBot);
     const store = this.hub.profiles;
@@ -1023,7 +1087,7 @@ class Room {
     }
     store.save();
     this.phase = 'ended';
-    if (winner) this.sys(`🏆 ${winner.name} is the last camper standing! ${countsForWins ? '' : '(Wins only count with 2+ human campers.)'}`, 'game');
+    if (winner && !standings) this.sys(`🏆 ${winner.name} is the last camper standing! ${countsForWins ? '' : '(Wins only count with 2+ human campers.)'}`, 'game');
     this.emitEv('gameover', { winnerId, results, ranked, tie, resultsMs: RESULTS_MS });
     this.emitState();
     // refresh profiles for everyone who played
@@ -1096,7 +1160,8 @@ class Room {
           remainingMs: g.special.deadline ? Math.max(0, g.special.deadline - now) : null, totalMs: g.special.totalMs || null,
           generating: g.special.generating, from: g.special.from,
         } : null,
-        leaderId: this.settings.gimmick === 'leaderpick' && g.stage !== 'intro' ? this.clearLeader() : null,
+        leaderId: this.settings.gimmick === 'leaderpick' && g.stage !== 'intro' && this.settings.pickBy === 'leader' ? this.clearLeader() : null,
+        nextPicker: this.settings.gimmick === 'leaderpick' && g.stage !== 'intro' && this.settings.pickBy === 'rotate' ? this.pickerId() : null,
         minTier: this.minTierKey(),
         trailLeft: (() => { const l = this.trailLimit(); return l ? Math.max(0, l - g.catAnswers) : null; })(),
         catSpecial: !!g.catSpecial,

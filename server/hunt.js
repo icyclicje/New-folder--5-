@@ -200,12 +200,27 @@ function parseListWikitext(text) {
   return items.slice(0, 1500);
 }
 
+/**
+ * How exactly is a "List of …" page the category? 1 = exactly ("List of goat breeds", "List of songs by
+ * Taylor Swift"), 0.8 = almost (one extra word: "List of Iberian goat breeds"), less = only related (ignored).
+ * Generic orderings ("… by country", "(A–Z)") don't count as extra words.
+ */
+function listCloseness(title, core) {
+  if (!/^lists? of /i.test(title)) return 0;
+  let t = title.replace(/^lists? of /i, '').replace(/\s*\([^)]*\)\s*$/, '');
+  t = t.replace(/[,:]?\s*\b(by|in|from|sorted by|ordered by)\s+(country|countries|year|decade|region|state|continent|type|date|origin|name|number|size|population|area|alphabet|category|genre|period|era|century)\b.*$/i, '').replace(/\s*:\s*[A-Z]–[A-Z].*$/, '').trim();
+  const tw = content(t).map(stem);
+  const want = content(core).map(stem);
+  if (!want.length || !want.every((w) => tw.includes(w))) return 0;
+  const extra = tw.filter((w) => !want.includes(w)).length;
+  return extra === 0 ? 1 : extra === 1 ? 0.8 : 0.4;
+}
+
+/** Wikipedia lists that are the category exactly or almost exactly, best first (only those are used). */
 async function listPagesFor(core) {
-  const want = content(core);
   const titles = await searchTitles(`intitle:list ${pluralPhrase(core)}`, 0, 10);
-  const ok = titles.filter((t) => /^lists? of /i.test(t) && want.every((w) => wordList(t).map(stem).includes(stem(w))));
-  // prefer the general list over a regional one ("List of goat breeds" before "List of Iberian goat breeds")
-  return ok.sort((a, b) => a.length - b.length).slice(0, 2);
+  return titles.map((t) => ({ t, c: listCloseness(t, core) })).filter((x) => x.c >= 0.8)
+    .sort((a, b) => b.c - a.c || a.t.length - b.t.length).slice(0, 2).map((x) => ({ title: x.t, exact: x.c === 1 }));
 }
 
 async function listItems(title) {
@@ -273,8 +288,9 @@ async function wikiHunt(category, core, tried) {
       category.hunt.wpLabel ||= cat.replace(/^Category:/, '');
     })().catch(() => {}));
   }
-  await jobs[0];
-  for (const lt of (category._wp?.items.size || 0) >= 150 ? [] : lists) {
+  const useLists = lists.filter((l) => l.exact);
+  if (!useLists.length) { await jobs[0]; if ((category._wp?.items.size || 0) < 150) useLists.push(...lists); }
+  for (const { title: lt, exact } of useLists) {
     if (tried.has(lt)) continue;
     tried.add(lt);
     jobs.push((async () => {
@@ -287,13 +303,16 @@ async function wikiHunt(category, core, tried) {
       // unless the list's descriptions just use other words (then the list itself is the authority)
       const fit = items.filter((i) => descFitsCore(i.desc, core));
       if (fit.length >= Math.max(8, items.length * 0.3)) items = fit;
-      ingestWiki(category, items, 'list');
+      ingestWiki(category, items, exact ? 'exact list' : 'list');
       ctx.lists.add(lt);
       added += retierWiki(category);
-      category.hunt.wpLabel ||= lt;
+      if (exact) category.hunt.wpLabel = lt; else category.hunt.wpLabel ||= lt;
+      // the nichest answer, straight away (readership is already in hand) — it can still move deeper later
+      if (!category.goldenEntry()) wikiGolden(category).catch(() => {});
     })().catch(() => {}));
   }
   await Promise.all(jobs);
+  if (!category.goldenEntry() && ctx.items.size >= 8) wikiGolden(category).catch(() => {});
   return added;
 }
 
@@ -567,6 +586,7 @@ function huntCategory(prompt, { onProgress, beforeApprox = null, fallbacks = [] 
 /** The nichest Wikipedia-listed answer becomes the Golden Antler, with a real fact. */
 async function wikiGolden(category) {
   const ctx = category._wp;
+  if (!ctx || category.goldenEntry()) return false;
   const pool = [...ctx.items.values()].filter((x) => x.views > 0 && (!x.desc || descFitsCore(x.desc, category.hunt.core) || ctx.lists.size === 0)).sort((a, b) => a.views - b.views);
   for (const it of pool.slice(0, 6)) {
     const e = category.match(it.name, { typo: 'off' })?.entry;
@@ -650,6 +670,36 @@ async function judgeRaw(category, h, answer) {
   return { valid: false };
 }
 
+/**
+ * Exact (or almost exact) Wikipedia lists into an AI-generated category — only for list-like questions
+ * ("Pixar movie", "goat breed"), never broad ones ("something red"). Returns answers added.
+ */
+async function listsInto(category, prompt, onProgress) {
+  const { kind } = conceptOf(prompt);
+  if (/linked to "/i.test(prompt) || kind === 'place' || kind === 'adj' || needsWeb(prompt)) return 0;
+  category.hunt ||= { core: wikidata.corePhrase(prompt), cats: new Set() };
+  category.sources ||= new Set();
+  const ctx = category._wp || (category._wp = { items: new Map(), cats: new Set(), lists: new Set() });
+  let n = 0;
+  for (const r of readings(prompt)) {
+    const lists = (await listPagesFor(r).catch(() => [])).filter((l) => !ctx.lists.has(l.title)).slice(0, 1);
+    for (const { title } of lists) {
+      const raw = await listItems(title).catch(() => []);
+      if (raw.length < 4) continue;
+      const info = await pageInfo(raw.map((x) => x.title));
+      let items = raw.map((x) => ({ ...x, ...(info.get(x.title) || { views: 0, desc: '' }), title: info.get(x.title)?.title || x.title })).filter((i) => !BAD_DESC.test(i.desc));
+      const fit = items.filter((i) => descFitsCore(i.desc, r));
+      if (fit.length >= Math.max(8, items.length * 0.3)) items = fit;
+      ingestWiki(category, items, 'exact list');
+      ctx.lists.add(title);
+      n += retierWiki(category);
+    }
+    if (n) break;
+  }
+  if (n) onProgress?.(category);
+  return n;
+}
+
 /** Wikipedia hunt into an existing (AI-generated) category when Wikidata can't list it. Returns answers added. */
 async function wikiInto(category, prompt, onProgress) {
   category.hunt ||= { core: wikidata.corePhrase(prompt), cats: new Set() };
@@ -662,4 +712,4 @@ async function wikiInto(category, prompt, onProgress) {
   return n;
 }
 
-module.exports = { huntCategory, wikiInto, judge, needsWeb, conceptOf, readings, parseListWikitext, descFitsCore };
+module.exports = { huntCategory, wikiInto, listsInto, listCloseness, judge, needsWeb, conceptOf, readings, parseListWikitext, descFitsCore };

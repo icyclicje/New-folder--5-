@@ -8,7 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const { Category, sanitizeCategoryDef } = require('./answers');
-const { shuffle, pick, polishPrompt, cleanText, promptTokens, answerKey: answerKeyOf } = require('./util');
+const { shuffle, pick, polishPrompt, cleanText, promptTokens, answerKey: answerKeyOf, normalize, editDistance } = require('./util');
 const wikidata = require('./wikidata');
 const hunt = require('./hunt');
 const { expandTopic, rankPrompts, findSamePrompt, associationBoard } = require('./fallback');
@@ -39,6 +39,91 @@ class QuestionService {
       } catch (err) { this.log.warn?.(`[bank] could not load ${f}: ${err.message}`); }
     }
     this.log.info?.(`[bank] Campfire Classics: ${this.campfire.size} categories`);
+    const warm = () => (this.krillion.ready ? this.buildAnswerIndex() : setTimeout(warm, 5000));
+    setTimeout(warm, 8000);
+  }
+
+  // ---------------------------------------------------------------- archive search
+  /**
+   * A compact answer index for "which trails have this answer?": one newline-joined string of normalized
+   * answers per trail (~15–20 MB for a million answers, vs ~130 MB for a full map). Built in the background,
+   * one Krillion day per tick, so the server never stalls.
+   */
+  buildAnswerIndex() {
+    if (this._answerIndex || this._answerIndexing) return this._answerIndexing;
+    const idx = new Map(); // id -> "\nname\tT\nname\tT…\n"
+    const line = (raw, t) => `${normalize(String(raw).split('|')[0])}\t${t}`;
+    const addDef = (id, def) => {
+      const parts = [];
+      for (const [tier, list] of Object.entries(def.tiers || {})) for (const a of list) parts.push(line(typeof a === 'string' ? a : a?.answer || '', tier[0]));
+      if (def.golden) parts.push(line(typeof def.golden === 'string' ? def.golden : def.golden.answer || '', 'g'));
+      idx.set(id, '\n' + parts.join('\n') + '\n');
+    };
+    this._answerIndexing = new Promise((resolve) => {
+      for (const d of this.campfire.values()) addDef(d.id, d);
+      const days = [...this.krillion.index.keys()];
+      const step = () => {
+        const date = days.shift();
+        if (!date) { this._answerIndex = idx; this.log.info?.(`[search] answer index ready: ${idx.size} trails`); resolve(idx); return; }
+        try { for (const q of this.krillion._loadDay(date)) addDef(q.id || `k-${date}-${q.n}`, q); } catch { /* skip a bad day */ }
+        setImmediate(step);
+      };
+      step();
+    });
+    return this._answerIndexing;
+  }
+
+  /**
+   * Archive search. Simple: ranked by how well the prompt matches (typos, plurals, word prefixes as you type,
+   * exact phrases first). Advanced: `answer` finds trails that contain an answer; `source`, `min`, `max`, `sort` filter.
+   */
+  async searchArchive({ q = '', answer = '', source = '', min = 0, max = Infinity, sort = 'best', limit = 120 } = {}) {
+    let list = this.allSummaries().filter((x) => (!source || x.source === source) && x.total >= min && x.total <= max);
+    const qn = normalize(q);
+    if (qn) {
+      const qt = promptTokens(q);
+      const last = qn.split(' ').pop();
+      list = list.map((x) => {
+        const pn = normalize(x.prompt);
+        const toks = promptTokens(x.prompt);
+        let sc = pn.includes(qn) ? 6 : 0; // the exact phrase
+        let full = 0;
+        for (const t of qt) {
+          if (toks.includes(t)) { sc += 3; full++; continue; }
+          const close = toks.find((w) => w.length >= 5 && t.length >= 5 && editDistance(w, t) <= 1); // a typo
+          if (close) { sc += 2; full++; }
+        }
+        if (qt.length >= 2 && !full && !pn.includes(qn)) return { ...x, score: 0 }; // a half-typed word alone is not a match
+        if (last.length >= 2 && toks.some((w) => w.startsWith(last) && w !== last)) sc += 1.5; // still typing
+        return { ...x, score: sc / Math.sqrt(toks.length + qt.length + 1) };
+      }).filter((x) => x.score > 0);
+    }
+    const an = normalize(answer);
+    if (an) {
+      const idx = this._answerIndex || (await Promise.race([this.buildAnswerIndex(), new Promise((r) => setTimeout(r, 6000))]));
+      if (!idx) return { results: [], indexing: true };
+      const TIERS = { k: 'kindling', t: 'trailhead', b: 'backcountry', d: 'deepwoods', g: 'golden' };
+      const hits = [];
+      for (const x of list) {
+        const text = idx.get(x.id) || (x.source === 'ai' ? (() => { const c = this.getById(x.id); return c ? '\n' + c.entries.map((e) => `${normalize(e.name)}\t${e.tier[0]}`).join('\n') + '\n' : ''; })() : '');
+        if (!text) continue;
+        let at = text.indexOf(`\n${an}\t`); // exactly that answer
+        let exact = at >= 0;
+        if (!exact) { at = text.indexOf(an); if (at < 0 || an.length < 3) continue; at = text.lastIndexOf('\n', at); } // an answer containing it
+        const end = text.indexOf('\n', at + 1);
+        const [name, t] = text.slice(at + 1, end).split('\t');
+        hits.push({ ...x, match: name, matchTier: TIERS[t] || 'trailhead', exact, score: (x.score || 0) + (exact ? 10 : 4) });
+      }
+      list = hits;
+    }
+    const by = {
+      best: (a, b) => (b.score || 0) - (a.score || 0) || b.total - a.total,
+      newest: (a, b) => String(b.date || '').localeCompare(String(a.date || '')),
+      most: (a, b) => b.total - a.total,
+      fewest: (a, b) => a.total - b.total,
+    }[sort] || ((a, b) => (b.score || 0) - (a.score || 0));
+    if (qn || an || sort !== 'best') list = [...list].sort(by);
+    return { results: list.slice(0, limit).map(({ id, prompt, total, source: src, date, match, matchTier, exact }) => ({ id, prompt, total, source: src, date, match, matchTier, exact })), total: list.length };
   }
 
   /** Summaries of every known prompt (Krillion + Campfire + generated cache). */

@@ -1,5 +1,5 @@
 // Mivimoose Party — the campsite game view.
-import { $, $$, esc, toast, tierVar, bannerStyle } from './ui.js';
+import { $, $$, esc, toast, modal, tierVar, bannerStyle } from './ui.js';
 import { sfx } from './sfx.js';
 import { mascotSVG, mooseSVG, stumpSVG } from './art.js';
 import { icon } from './icons.js';
@@ -260,7 +260,11 @@ export class GameView {
       const isTurn = g.turn?.pid === pid && (g.stage === 'turn' || g.stage === 'judging');
       el.querySelector('.wrongs').innerHTML = isTurn ? (p.wrong || []).map((w) => `<span class="${w.reason === 'taken' ? 'taken' : w.reason === 'too-common' ? 'toocommon' : ''}">${esc(w.text)}</span>`).join('') : '';
       // crown for leader's pick
-      el.querySelector('.crown').classList.toggle('hidden', !(g.leaderId && g.leaderId === pid && p.alive));
+      // the crown marks the leader; when campers take turns carving, an axe marks whoever carves next
+      const crown = el.querySelector('.crown');
+      const badge = g.nextPicker ? 'axe' : 'crown';
+      if (crown.dataset.badge !== badge) { crown.dataset.badge = badge; crown.innerHTML = icon(badge); crown.title = badge === 'axe' ? 'Carves the next trail sign' : 'In the lead'; }
+      crown.classList.toggle('hidden', !(((g.nextPicker || g.leaderId) === pid) && p.alive));
       if (!isTurn) this.hideTyping(pid);
     }
   }
@@ -285,7 +289,8 @@ export class GameView {
     const g = s.game;
     const cat = this.app.catalog;
     const mode = cat.modes[s.settings.mode];
-    let html = `<span class="pill">${mode.icon} ${esc(mode.name)} · Round <b>${g.round}</b></span>`;
+    const lim = s.settings.roundLimit;
+    let html = `<span class="pill">${mode.icon} ${esc(mode.name)} · Round <b>${g.round}</b>${lim && !g.duel ? ` of ${lim}` : ''}</span>`;
     if (s.settings.gimmick !== 'none') {
       const gm = cat.gimmicks[s.settings.gimmick];
       const n = g.specialIn;
@@ -297,7 +302,27 @@ export class GameView {
     if (g.duel) html += `<span class="pill duel-pill">⚔️ One-bank duel · <b>${g.remaining ?? '?'}</b> answers left${g.category?.complete === false ? ' (+ still scouting)' : ''} — clear it and it's a tie</span>`;
     else html += `<span class="pill">🗺️ <b>${g.used}</b> answers hiked${g.trailLeft != null ? ` · new trail in <b>${g.trailLeft}</b>` : ''}</span>`;
     html += '<button class="pill hud-radio" data-radio>📻 Radio & Trail Log</button>';
+    // the host can call it a night (not in ranked games, which play to the last camper)
+    if (s.hostId === this.me && !g.ranked && !s.quick && g.stage !== 'over') html += '<button class="pill hud-end" data-endgame title="End the game now — standings by lives, then points">🌙 End game</button>';
     $('#hud').innerHTML = html;
+    $('#hud [data-endgame]')?.addEventListener('click', () => this.confirmEnd());
+    // the same option in the sidebar, which no overlay covers (intro, a long Leader's Pick)
+    const canEnd = s.hostId === this.me && !g.ranked && !s.quick && g.stage !== 'over';
+    $('#sidebar-foot').classList.toggle('hidden', !canEnd);
+    const eb = $('#btn-endgame');
+    if (eb && !eb.dataset.bound) { eb.dataset.bound = '1'; eb.addEventListener('click', () => this.confirmEnd()); }
+  }
+
+  confirmEnd() {
+    sfx.click();
+    const m = modal({ title: 'End the game?', html: `<p class="muted" style="margin-top:0">Everyone still standing is ranked by lives, then points. Campers dead level on both share the win.</p>
+      <div class="fg-row" style="justify-content:flex-end"><button class="btn btn-ghost" data-keep>Keep playing</button><button class="btn btn-fire" data-end>🌙 End game</button></div>` });
+    m.body.querySelector('[data-keep]').addEventListener('click', () => { sfx.click(); m.close(); });
+    m.body.querySelector('[data-end]').addEventListener('click', () => {
+      sfx.click();
+      this.app.socket.emit('room:end', {}, (res) => { if (res && !res.ok && res.error) toast(res.error, 'err'); });
+      m.close();
+    });
   }
 
   renderMe(s) {
@@ -350,7 +375,8 @@ export class GameView {
     if (g.stage === 'picking' && g.special) {
       const leader = byId.get(g.special.leaderId);
       if (g.special.leaderId === this.me) {
-        const { fresh } = this.showOverlay('pick-me-' + (this.pickRound = g.round), `<div class="big">🪓 You have the most lives!</div>
+        const by = this.state.settings.pickBy;
+        const { fresh } = this.showOverlay('pick-me-' + (this.pickRound = g.round), `<div class="big">🪓 ${by === 'rotate' ? 'Your turn to carve!' : by === 'random' ? 'The ranger picked you!' : 'You have the most lives!'}</div>
           <p class="muted">Carve the next category onto the trail sign — the ranger scouts answers on the fly.</p>
           <form id="pick-form" class="fg-row"><input id="pick-input" maxlength="90" placeholder="e.g. Name a pizza topping" autocomplete="off"><button class="btn btn-fire" type="submit">Carve it 🪓</button></form>
           <div class="suggest-chips" id="pick-sugg"></div>
@@ -381,7 +407,7 @@ export class GameView {
       } else {
         this.showOverlay('pick-' + g.special.leaderId, `<div class="big">🪓 ${esc(leader?.name || 'The leader')} is carving the next trail sign…</div>
           <div class="carving" id="carving"><span id="carving-text"></span><span class="caret"></span></div>
-          <div class="timer-bar"><i id="pick-timer"></i></div><p class="muted">Leader's Pick — the camper in the lead names the category!</p>`);
+          <div class="timer-bar"><i id="pick-timer"></i></div><p class="muted">${{ rotate: "Leader's Pick — everyone takes a turn carving.", random: "Leader's Pick — a random camper carves each time." }[this.state.settings.pickBy] || "Leader's Pick — the camper in the lead names the category!"}</p>`);
         this.pickDeadline = performance.now() + (g.special.remainingMs || 0);
         this.pickTotal = g.special.totalMs || 40000;
       }

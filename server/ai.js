@@ -36,6 +36,7 @@ const CONCURRENCY = Math.max(2, parseInt(process.env.MIVI_AI_CONCURRENCY || '16'
 const WAVES = Math.max(0, parseInt(process.env.MIVI_AI_WAVES || '1', 10)); // extra deep-search waves while in play
 const READY_AT = 12;
 const SLICE_MODEL = process.env.MIVI_AI_SLICE_MODEL || MODEL; // e.g. a faster model for the bulk letter slices
+const JUDGE_MODEL = process.env.MIVI_AI_JUDGE_MODEL || MODEL; // e.g. a faster model for live referee calls
 const CACHE_VERSION = 3; // bump when generation quality changes so stale boards are re-scouted
 const CACHE_MAX_ENTRIES = 80000; // total answers kept in the notebook on disk
 
@@ -259,6 +260,8 @@ class AIGen {
     let freeP = null;
     const runFree = () => freeP || (freeP = hunt.wikiInto(category, prompt, () => progress()).catch(() => 0));
     if (web) tasks.push(runWeb('live web question'));
+    // a Wikipedia list that IS this category ("List of Pixar films") is the most complete answer key there is
+    tasks.push(hunt.listsInto(category, prompt, () => { category.sources.add('wikipedia'); progress(); }).catch(() => 0));
 
     const wdOpts = () => ({ into: category, goldenOwner: true, onProgress: () => { category.sources.add('wikidata'); progress(); } });
     let wdJob = wikidata.generate(prompt, wdOpts());
@@ -450,6 +453,7 @@ Search the web to check whether this is a genuinely correct answer (allow misspe
     const ck = AIGen.promptKey(prompt) + '::' + answerKey(answer);
     if (this.judgeCache.has(ck)) return this.judgeCache.get(ck);
     const msg = await this.client.beta.messages.create(this._params({
+      model: JUDGE_MODEL,
       max_tokens: 1500,
       output_config: {
         effort: 'low',

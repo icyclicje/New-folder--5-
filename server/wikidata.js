@@ -26,12 +26,13 @@
  * Unlisted answers are checked live with judge(): name search, then a description check
  * ("eagle — large carnivorous bird") raced against a SPARQL class-membership check.
  */
+const fs = require('fs');
 const { Category } = require('./answers');
 const { cleanText, answerKey, normalize, typoDistance, typoBudget, wordList } = require('./util');
 
 const CONTACT = cleanText(process.env.MIVI_CONTACT || '', 120);
 const UA = `MivimooseParty/1.2 (campfire party game; question generator${CONTACT ? '; ' + CONTACT : ''})`;
-const QLEVER = process.env.MIVI_QLEVER_URL || 'https://qlever.cs.uni-freiburg.de/api/wikidata';
+const QLEVER = process.env.MIVI_QLEVER_URL || 'https://qlever.dev/api/wikidata'; // (the old uni-freiburg address now 308-redirects here)
 const WDQS = 'https://query.wikidata.org/sparql';
 const API = 'https://www.wikidata.org/w/api.php';
 const WP_API = 'https://en.wikipedia.org/w/api.php';
@@ -110,6 +111,195 @@ async function labelLookup(text, limit) {
   return rows.map((r) => ({ id: qid(r.i.value), label: r.label?.value || text, description: r.desc?.value || '', matched: r.label?.value || text, sl: +(r.sl?.value || 0) }));
 }
 
+// ---------------------------------------------------------------- Wikipedia name resolution
+const wikiCache = new Map();
+const cleanWpTitle = (t) => cleanText(String(t || '').replace(/\s*\([^)]*\)\s*$/, ''), 90);
+/**
+ * One Wikipedia search request: matching pages with their Wikidata IDs, descriptions, redirect names
+ * (nicknames, abbreviations, old spellings) and categories, plus the engine's spelling suggestion.
+ */
+function wikiSearchPages(q, limit = 5) {
+  const key = normalize(q) + ':' + limit;
+  if (wikiCache.has(key)) return wikiCache.get(key);
+  const url = `${WP_API}?action=query&format=json&formatversion=2&generator=search&gsrsearch=${encodeURIComponent(cleanText(q, 140))}&gsrlimit=${limit}&gsrinfo=suggestion&prop=pageprops|description|redirects|categories&ppprop=wikibase_item&rdlimit=max&rdnamespace=0&cllimit=max&clshow=!hidden&redirects=1`;
+  const p = getJSON(url, 3000).then((j) => ({
+    suggestion: j.query?.searchinfo?.suggestion || null,
+    pages: (j.query?.pages || []).sort((a, b) => a.index - b.index).filter((pg) => pg.pageprops?.wikibase_item).map((pg) => ({
+      id: pg.pageprops.wikibase_item,
+      title: pg.title,
+      description: pg.description || '',
+      redirects: (pg.redirects || []).map((r) => r.title),
+      cats: (pg.categories || []).map((c) => c.title.replace(/^Category:/, '')),
+    })),
+  }));
+  wikiCache.set(key, p);
+  p.catch(() => wikiCache.delete(key));
+  lru(wikiCache, 3000);
+  return p;
+}
+
+/** Does a page's title or one of its redirects say what the player typed (within typo budget, or as a surname)? */
+function pageNamed(pg, names) {
+  const keys = [cleanWpTitle(pg.title), ...pg.redirects.map(cleanWpTitle)].map(answerKey).filter(Boolean);
+  const titleWords = wordList(cleanWpTitle(pg.title));
+  for (const n of names) {
+    const k = answerKey(n);
+    if (!k) continue;
+    const b = typoBudget(k.length);
+    const hit = keys.find((x) => x === k || typoDistance(k, x, b) <= b);
+    if (hit) return n;
+    if (k.length >= 4 && titleWords.length > 1 && titleWords[titleWords.length - 1] === k) return n; // "Monet" → Claude Monet
+  }
+  return null;
+}
+
+/**
+ * Candidates for a typed answer from Wikipedia: the plain search, the search with the category as
+ * context ("up" + "film Pixar" → Up (2009 film)), and the spelling suggestion ("bald egle" → bald eagle).
+ */
+async function wikiCandidates(typed, context, lean = false) {
+  const [plain, withCtx] = await Promise.all([
+    lean && context ? null : wikiSearchPages(typed, 5).catch(() => null),
+    context ? wikiSearchPages(`${typed} ${context}`, 6).catch(() => null) : null,
+  ]);
+  const names = [typed];
+  const ctxKey = context ? normalize(context) : '';
+  for (const sug of [plain?.suggestion, withCtx?.suggestion]) {
+    if (!sug) continue;
+    let n = normalize(sug);
+    if (ctxKey && n.endsWith(' ' + ctxKey)) n = n.slice(0, -(ctxKey.length + 1)); // "dachshund dog breed" → dachshund
+    if (n && answerKey(n) !== answerKey(typed) && !names.some((x) => answerKey(x) === answerKey(n))) names.push(n);
+  }
+  let extra = null;
+  if (names.length > 1) extra = await wikiSearchPages(names[1], 4).catch(() => null);
+  const out = new Map();
+  for (const res of [withCtx, plain, extra]) {
+    for (const pg of res?.pages || []) {
+      if (out.has(pg.id)) continue;
+      const matched = pageNamed(pg, names);
+      if (matched) out.set(pg.id, { id: pg.id, label: cleanWpTitle(pg.title), description: pg.description, matched, cats: pg.cats, wiki: true });
+    }
+  }
+  return [...out.values()];
+}
+
+// ---------------------------------------------------------------- resilient name resolution
+// Wikidata's search runs *server-side* through the query service (wikibase:mwapi), so it keeps working when
+// Wikimedia rate-limits this server's own API calls. Spelling help comes from Datamuse (not Wikimedia at all).
+const sparqlStr = (x) => '"' + String(x).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+const spellCache = new Map();
+/** Up to two likely intended spellings ("dachsund" → dachshund, "bald egle" → bald eagle). */
+function spellingAlternatives(text) {
+  const n = normalize(text);
+  if (n.length < 4) return Promise.resolve([]);
+  if (spellCache.has(n)) return spellCache.get(n);
+  const tk = answerKey(n);
+  const budget = Math.max(1, typoBudget(tk.length));
+  const p = Promise.all([
+    getJSON(`https://api.datamuse.com/words?max=6&sp=${encodeURIComponent(n)}`, 1500).catch(() => []),
+    getJSON(`https://api.datamuse.com/sug?max=4&s=${encodeURIComponent(n)}`, 1500).catch(() => []),
+  ]).then(([a, b]) => {
+    const out = [];
+    for (const w of [...a, ...b]) {
+      const k = answerKey(w.word);
+      if (!k || k === tk || out.some((x) => answerKey(x) === k)) continue;
+      if (Math.abs(k.length - tk.length) <= 2 && typoDistance(tk, k, budget) <= budget) out.push(w.word);
+      if (out.length >= 2) break;
+    }
+    return out;
+  });
+  spellCache.set(n, p);
+  lru(spellCache, 2000);
+  return p;
+}
+
+const rowsToCands = (rows) => {
+  const by = new Map();
+  for (const r of rows) {
+    const id = qid(r.item.value);
+    const c = by.get(id) || { id, label: r.label?.value || '', description: r.desc?.value || '', aliases: new Set(), sl: +(r.sl?.value || 0) };
+    for (const a of String(r.aliases?.value || '').split('|')) if (a) c.aliases.add(a);
+    by.set(id, c);
+  }
+  return [...by.values()];
+};
+
+/** Wikidata's alias-aware search (labels + aliases, like the API) for several spellings at once, server-side. */
+function mwEntitySearch(names, limit = 12) {
+  const vals = [...new Set(names.map((x) => cleanText(x, 80)).filter(Boolean))].slice(0, 3).map(sparqlStr).join(' ');
+  if (!vals) return Promise.resolve([]);
+  return sparqlOn(WDQS, `SELECT ?item (SAMPLE(?lab) AS ?label) (SAMPLE(?d) AS ?desc) (MAX(?s) AS ?sl) (GROUP_CONCAT(DISTINCT ?al; separator="|") AS ?aliases) WHERE {
+    VALUES ?q { ${vals} }
+    SERVICE wikibase:mwapi { bd:serviceParam wikibase:endpoint "www.wikidata.org"; wikibase:api "EntitySearch"; mwapi:search ?q; mwapi:language "en"; mwapi:limit "${limit}". ?item wikibase:apiOutputItem mwapi:item. ?num wikibase:apiOrdinal true. }
+    FILTER(?num < ${limit})
+    OPTIONAL { ?item rdfs:label ?lab FILTER(LANG(?lab) = "en") }
+    OPTIONAL { ?item schema:description ?d FILTER(LANG(?d) = "en") }
+    OPTIONAL { ?item skos:altLabel ?al FILTER(LANG(?al) = "en") }
+    OPTIONAL { ?item wikibase:sitelinks ?s }
+  } GROUP BY ?item`, 3000).then(rowsToCands);
+}
+
+/** Which statement pins an answer to this trail directly ("haswbstatement:P31=Q39367" for dog breeds)? */
+function classFilterFor(wd) {
+  if (!wd?.cls || wd.taxon || wd.ent) return null; // taxa are too deep and too many; entity trails need the entity link
+  if (wd.occupation) return `P106=${wd.cls}`;
+  return wd.mode === 'subclass' ? `P279=${wd.cls}` : `P31=${wd.cls}`;
+}
+
+/** Full-text search restricted to the trail's class (fuzzy for long words), server-side. Every hit is a member. */
+function mwClassSearch(names, filter, fuzzy) {
+  const terms = [];
+  for (const n of [...new Set(names.map(normalize).filter(Boolean))].slice(0, 2)) {
+    terms.push(`${n} haswbstatement:${filter}`);
+    if (fuzzy) terms.push(`${n.split(' ').map((w) => (w.length >= 5 ? w + '~' : w)).join(' ')} haswbstatement:${filter}`);
+  }
+  const vals = [...new Set(terms)].map(sparqlStr).join(' ');
+  return sparqlOn(WDQS, `SELECT ?item (SAMPLE(?lab) AS ?label) (SAMPLE(?d) AS ?desc) (MAX(?s) AS ?sl) (GROUP_CONCAT(DISTINCT ?al; separator="|") AS ?aliases) WHERE {
+    VALUES ?q { ${vals} }
+    SERVICE wikibase:mwapi { bd:serviceParam wikibase:endpoint "www.wikidata.org"; wikibase:api "Search"; mwapi:srsearch ?q; mwapi:srlimit "6". ?title wikibase:apiOutput mwapi:title. ?num wikibase:apiOrdinal true. }
+    FILTER(?num < 6)
+    BIND(IRI(CONCAT(STR(wd:), ?title)) AS ?item)
+    OPTIONAL { ?item rdfs:label ?lab FILTER(LANG(?lab) = "en") }
+    OPTIONAL { ?item schema:description ?d FILTER(LANG(?d) = "en") }
+    OPTIONAL { ?item skos:altLabel ?al FILTER(LANG(?al) = "en") }
+    OPTIONAL { ?item wikibase:sitelinks ?s }
+  } GROUP BY ?item LIMIT 40`, 3000).then(rowsToCands);
+}
+
+/** Does a candidate's label or one of its aliases say one of the names (typo budget; surnames; "cheddar" → Cheddar cheese)? */
+function nameMatch(c, names, clsWords, strict = false) {
+  const forms = [c.label, ...(c.aliases || [])].filter(Boolean);
+  for (const n of names) {
+    const tk = answerKey(n);
+    if (!tk) continue;
+    const b = typoBudget(tk.length);
+    for (const form of forms) {
+      const k = answerKey(form);
+      if (k === tk || (!strict && typoDistance(tk, k, b) <= b)) return form;
+    }
+    const words = wordList(c.label);
+    if (tk.length >= 4 && words.length > 1 && words[words.length - 1] === tk) return c.label; // "Monet" → Claude Monet
+    if (words.length > 1 && words[0] === tk && words.slice(1).every((x) => clsWords.has(x) || ['cheese', 'dog', 'cat', 'tree', 'plant', 'bird', 'fish'].includes(x))) return c.label;
+  }
+  return null;
+}
+
+/** Exact labels AND aliases ("sax", "T. rex") for several spellings — QLever first, so it doesn't lean on Wikimedia. */
+async function exactNames(names, limit = 12, strict = false) {
+  const values = [...new Set(names.flatMap((n) => labelVariants(n)))].slice(0, 24).map(lit).join(' ');
+  if (!values) return [];
+  const q = `SELECT ?i (SAMPLE(?l) AS ?label) (SAMPLE(?lab) AS ?main) (SAMPLE(?d) AS ?desc) (MAX(?s) AS ?sl) WHERE { VALUES ?l { ${values} } { ?i rdfs:label ?l } UNION { ?i skos:altLabel ?l } ?i wikibase:sitelinks ?s . OPTIONAL { ?i rdfs:label ?lab FILTER(LANG(?lab) = "en") } OPTIONAL { ?i schema:description ?d . FILTER(LANG(?d) = "en") } } GROUP BY ?i ORDER BY DESC(?sl) LIMIT ${limit}`;
+  const rows = await sparql(q, { ms: 3000, prefer: 'wdqs' }).catch((err) => { if (strict) throw err; return []; });
+  return rows.map((r) => ({ id: qid(r.i.value), label: r.main?.value || r.label?.value || '', description: r.desc?.value || '', matched: r.label?.value || '', sl: +(r.sl?.value || 0), aliases: new Set([r.label?.value].filter(Boolean)) }));
+}
+
+/** Just Wikidata's search API (fails fast while it's rate-limiting us). */
+function apiSearch(text, limit = 20) {
+  if (cooling(API)) return Promise.reject(new Error('rate-limited'));
+  const url = `${API}?action=wbsearchentities&format=json&language=en&uselang=en&type=item&limit=${limit}&search=${encodeURIComponent(cleanText(text, 90))}`;
+  return getJSON(url, 2000).then((j) => (j.search || []).map((x) => ({ id: x.id, label: x.label || '', description: x.description || '', matched: x.match?.text || x.label || '' })));
+}
+
 /**
  * Find items by name: Wikidata's search API (~0.2s, labels + aliases, popularity-ordered),
  * raced against an exact-label SPARQL lookup. Returns [{id, label, description, matched}].
@@ -120,8 +310,11 @@ async function search(text, limit = 7) {
   const url = `${API}?action=wbsearchentities&format=json&language=en&uselang=en&type=item&limit=${limit}&search=${encodeURIComponent(cleanText(text, 90))}`;
   const api = getJSON(url, 2500).then((j) => (j.search || []).map((s) => ({ id: s.id, label: s.label || '', description: s.description || '', matched: s.match?.text || s.label || '' })));
   const nonEmpty = (pr) => pr.then((r) => (r.length ? r : Promise.reject(new Error('empty'))));
-  // the API (aliases, ~0.2s) usually wins; the label index covers rate limits / outages
-  const p = Promise.any([nonEmpty(api), nonEmpty(new Promise((r) => setTimeout(r, 350)).then(() => labelLookup(text, limit)))]).catch(() => []);
+  // the API (aliases, ~0.2s) usually wins; the label index and Wikipedia cover rate limits / outages
+  const later = (ms) => new Promise((r) => setTimeout(r, cooling(API) ? 0 : ms));
+  const viaWiki = later(300).then(() => (cooling(WP_API) ? [] : wikiCandidates(cleanText(text, 90), '')));
+  const viaServer = later(250).then(() => mwEntitySearch([text], limit)).then((cs) => cs.map((c) => ({ id: c.id, label: c.label, description: c.description, matched: [c.label, ...c.aliases].find((a) => answerKey(a) === answerKey(text)) || c.label })));
+  const p = Promise.any([nonEmpty(api), nonEmpty(later(350).then(() => labelLookup(text, limit))), nonEmpty(viaServer), nonEmpty(viaWiki)]).catch(() => []);
   searchCache.set(key, p);
   p.then((r) => { if (!r.length) searchCache.delete(key); }, () => searchCache.delete(key));
   lru(searchCache, 3000);
@@ -143,6 +336,15 @@ async function sparqlCheck(query, ms) {
     try { return await sparqlOn(ep, query, ms); } catch { /* next engine */ }
   }
   return [];
+}
+
+/** Like sparqlCheck, but a total failure (timeouts, rate limits) is an error — not an empty answer. */
+async function sparqlCheckStrict(query, ms) {
+  let last;
+  for (const ep of [WDQS, QLEVER].sort((a, b) => cooling(a) - cooling(b))) {
+    try { return await sparqlOn(ep, query, ms); } catch (err) { last = err; }
+  }
+  throw new Error(`unreachable (${last?.message || 'no engine'})`);
 }
 
 /**
@@ -201,7 +403,8 @@ async function classCandidates(phrase) {
   const want = answerKey(phrase);
   if (!want) return [];
   const res = await search(phrase, 8);
-  return res.filter((r) => (answerKey(r.label) === want || answerKey(r.matched) === want) && !BAD_CLASS_DESC.test(r.description)).slice(0, 3);
+  // a Wikipedia redirect ("painter" → Painting) is not the class itself: only exact titles count from Wikipedia
+  return res.filter((r) => (answerKey(r.label) === want || (!r.wiki && answerKey(r.matched) === want)) && !BAD_CLASS_DESC.test(r.description)).slice(0, 3);
 }
 
 async function entityFor(phrase) {
@@ -637,12 +840,13 @@ function generate(prompt, { into = null, onProgress, minItems = 12, hint = null,
     const p = best.p;
     p.fullDone = !!best.fullDone || !!p.ent; // entity lists come back complete in one go
     p.popularCount = best.items.length;
-    category.wd = { cls: p.cls.id, clsLabel: p.cls.label, ent: p.ent?.id || null, prop: p.prop || null, mode: p.kmode || 'instance', occupation: p.occupation, taxon: !!p.taxon };
+    category.wd = { cls: p.cls.id, clsLabel: p.cls.label, ent: p.ent?.id || null, entLabel: p.ent?.label || null, prop: p.prop || null, mode: p.kmode || 'instance', occupation: p.occupation, taxon: !!p.taxon };
     if (!category.sourceLabel || category.source === 'wikidata') category.sourceLabel = `Wikidata · ${p.cls.label}${p.ent ? ' · ' + p.ent.label : ''}`;
     category.catWords = new Set([...(category.catWords || []), ...wordList(p.cls.label)]);
     ingest(category, best.items, p);
     retier(category, p, p.fullDone);
     category.searchLog = [`popular ${best.items.length} in ${Date.now() - t0}ms`];
+    if (owner && !category.goldenEntry()) chooseGolden(category, p).catch(() => {}); // the nichest so far, right away
     onProgress?.(category);
     return p;
   })();
@@ -717,11 +921,30 @@ const tierFor = (sl, cut) => {
  * Name search (~0.2s), then a description sense check ("eagle — large carnivorous bird")
  * raced against a bounded SPARQL membership check on both engines (~0.3–0.9s).
  */
+// Settled verdicts are kept on disk, so an answer the ranger has ruled on before is instant — across games and restarts.
+let judgeStore = null, judgeFile = null, judgeSaveT = null;
+function useJudgeStore(file) {
+  judgeFile = file;
+  try { judgeStore = new Map(Object.entries(JSON.parse(fs.readFileSync(file, 'utf8')))); } catch { judgeStore = new Map(); }
+}
+function storeVerdict(key, v) {
+  if (!judgeStore) return;
+  judgeStore.delete(key);
+  judgeStore.set(key, v.valid ? { valid: true, canonical: v.canonical, names: v.names, tier: v.tier, sl: v.sl, how: v.how } : { valid: false, definite: true });
+  while (judgeStore.size > 20000) judgeStore.delete(judgeStore.keys().next().value);
+  clearTimeout(judgeSaveT);
+  judgeSaveT = setTimeout(() => fs.writeFile(judgeFile, JSON.stringify(Object.fromEntries(judgeStore)), () => {}), 2000);
+}
+
 function judge(wd, answer) {
   if (!wd?.cls) return Promise.resolve({ valid: false });
   const key = `${wd.cls}|${wd.ent || ''}|${wd.prop || ''}|${answerKey(answer)}`;
   if (judgeCache.has(key)) return judgeCache.get(key);
+  const stored = judgeStore?.get(key);
+  if (stored) { const sp = Promise.resolve({ ...stored, how: (stored.how || '') + ' (remembered)' }); judgeCache.set(key, sp); return sp; }
   const p = judgeRaw(wd, answer).catch(() => ({ valid: false }));
+  // only verdicts the ranger is sure of are remembered — never one cut short by a rate limit or outage
+  p.then((v) => { if (v.valid || v.definite) storeVerdict(key, v); });
   judgeCache.set(key, p);
   lru(judgeCache, 6000);
   return p;
@@ -734,7 +957,63 @@ async function judgeRaw(wd, answer) {
   const clsWords = new Set(wordList(wd.clsLabel || ''));
   if (tk === answerKey(wd.clsLabel || '')) return { valid: false }; // "bird" isn't a bird
   const named = (c) => answerKey(c.matched) === tk || answerKey(c.label) === tk;
-  const cands = (await search(typed, 20)).filter((c) => {
+  const context = [wd.clsLabel, wd.entLabel].filter(Boolean).join(' ');
+  const altP = spellingAlternatives(typed);
+  // Racer 2 (started first): broad resolution — Wikidata's API, the server-side alias search (with spelling
+  // fixes), exact labels/aliases and Wikipedia, then description / membership / entity / Wikipedia-category evidence
+  const broad = judgeBroad(wd, typed, tk, clsWords, named, context, altP);
+  // Racer 1: full-text search restricted to the class — any hit whose name matches IS a member (one round trip)
+  const filter = classFilterFor(wd);
+  const direct = filter ? altP.then((alts) => mwClassSearch([typed, ...alts], filter, tk.length >= 5 || alts.length > 0).then(async (cs) => {
+    const names = [typed, ...alts];
+    const hit = cs.map((c) => ({ c, form: nameMatch(c, names, clsWords, true) })).filter((x) => x.form).sort((a, b) => (answerKey(b.form) === tk) - (answerKey(a.form) === tk) || b.c.sl - a.c.sl)[0];
+    if (!hit) throw new Error('not found');
+    const label = tidyLabel(hit.c.label || hit.form);
+    const sl = hit.c.sl || (await sitelinksOf(hit.c.id).catch(() => null));
+    const verdict = { valid: true, canonical: looksLatin(label) && hit.form ? cap(hit.form) : label, names: [hit.c.label, hit.form].filter(Boolean), tier: tierFor(sl, wd.cut), sl: sl ?? undefined, how: 'class search' };
+    // a respelling ("shakespear") doesn't count if what they typed is, word for word, someone famous
+    const respelled = answerKey(hit.form) !== tk && !wordList(hit.c.label).includes(tk);
+    if (respelled) {
+      const exact = await exactNames([typed]).catch(() => []);
+      if (exact.some((c) => c.sl >= 30 && c.id !== hit.c.id)) throw new Error('not found');
+    }
+    // an obscure namesake (a painting called "Piano") only stands if the broad check finds nothing better
+    if (!Number.isFinite(sl) || sl < 5) {
+      const better = await broad.then(() => true, () => false);
+      if (better) throw new Error('superseded');
+    }
+    return verdict;
+  })) : null;
+  const racers = [broad, direct].filter(Boolean);
+  return Promise.any(racers).catch((agg) => {
+    const verdicts = (agg?.errors || []).map((e) => e?.verdict).filter(Boolean);
+    const errs = (agg?.errors || []).filter((e) => !e?.verdict);
+    const sure = verdicts.length ? verdicts.every((v) => v.definite) : false;
+    return { valid: false, definite: sure && errs.every((e) => /not a member|not found/.test(e?.message || '')) };
+  });
+}
+
+async function judgeBroad(wd, typed, tk, clsWords, named, context, altP) {
+  const alts = await altP.catch(() => []);
+  const names = [typed, ...alts];
+  // the four name sources overlap, so none of them may hold the verdict hostage: each gets ~1.8s
+  // each source reports whether it really answered — a "sure" rejection needs all of them
+  let missing = 0;
+  const capT = (p, ms = 1800) => Promise.race([p.then((r) => r, () => { missing++; return []; }), new Promise((r) => setTimeout(() => { missing++; r([]); }, ms))]);
+  const wikiOk = !cooling(WP_API);
+  if (!wikiOk) missing++;
+  const [apiFound, wikiFound, serverFound, exactFound] = await Promise.all([
+    capT(apiSearch(typed, 20)),
+    wikiOk ? capT(wikiCandidates(typed, context, true)) : [],
+    capT(mwEntitySearch(names)),
+    capT(exactNames(names, 12, true)),
+  ]);
+  const serverCands = [...serverFound, ...exactFound].map((c) => ({ ...c, matched: nameMatch(c, names, clsWords) })).filter((c) => c.matched);
+  // what they typed is, word for word, the name of someone/something famous? then a near-miss namesake doesn't count
+  const famousExact = serverCands.filter((c) => answerKey(c.matched) === tk && (c.sl || 0) >= 30).map((c) => c.id);
+  const isExact = (c) => [c.label, c.matched].some((n) => answerKey(n || '') === tk);
+  const vetoed = (c) => !isExact(c) && famousExact.some((id) => id !== c.id);
+  const apiCands = apiFound.filter((c) => {
     // the found name must really be what they typed (search is prefix-fuzzy: "Ca" must not become "Cars")
     const mk = answerKey(c.matched), lk = answerKey(c.label);
     if (mk === tk || lk === tk) return true;
@@ -745,7 +1024,10 @@ async function judgeRaw(wd, answer) {
     // "cheddar" → "Cheddar cheese": the extra words are just the category's own noun
     return words.length > 1 && words[0] === tk && words.slice(1).every((x) => clsWords.has(x) || ['cheese', 'dog', 'cat', 'tree', 'plant', 'bird', 'fish'].includes(x));
   });
-  if (!cands.length && !wd.ent) return { valid: false };
+  const seen = new Set();
+  const cands = [...apiCands, ...serverCands, ...wikiFound].filter((c) => !seen.has(c.id) && seen.add(c.id)).slice(0, 25);
+  const fail = (definite) => { const e = new Error('no verdict'); e.verdict = { valid: false, definite: definite && !missing }; throw e; };
+  if (!cands.length && !wd.ent) fail(false);
   const canonicalOf = (c) => {
     const l = tidyLabel(c.label || typed);
     return looksLatin(l) && c.matched && normalize(c.matched) !== normalize(c.label) ? cap(c.matched) : l;
@@ -753,38 +1035,65 @@ async function judgeRaw(wd, answer) {
   const tasks = [];
   // 1) the description already says what it is: "eagle — large carnivorous bird"
   if (!wd.occupation && !wd.ent) {
-    const fit = cands.find((c) => named(c) && descFits(c.description, wd.clsLabel)) || cands.find((c) => descFits(c.description, wd.clsLabel));
-    if (fit) tasks.push(sitelinksOf(fit.id).then((sl) => ({ valid: true, canonical: canonicalOf(fit), names: [fit.label, fit.matched].filter(Boolean), tier: tierFor(sl, wd.cut), sl: sl ?? undefined, how: 'description' })));
+    const fit = cands.find((c) => named(c) && descFits(c.description, wd.clsLabel)) || cands.find((c) => !vetoed(c) && descFits(c.description, wd.clsLabel));
+    if (fit) tasks.push((fit.sl ? Promise.resolve(fit.sl) : sitelinksOf(fit.id)).then((sl) => ({ valid: true, canonical: canonicalOf(fit), names: [fit.label, fit.matched].filter(Boolean), tier: tierFor(sl, wd.cut), sl: sl ?? undefined, how: 'description' })));
   }
   // 2) class membership on the knowledge graph
   const classes = [wd.cls, ...(CLASS_EXTRA[wd.cls] || [])];
   const member = wd.occupation
     ? `?i wdt:P31 wd:${HUMAN} . ?i wdt:P106/wdt:P279* wd:${wd.cls} .`
     : wd.taxon ? `?i wdt:P171+ wd:${wd.cls} . #GEAR#` + (TAXON_EXCLUDE[wd.cls] || []).map((x) => ` MINUS { ?i wdt:P171+ wd:${x} . #GEAR# }`).join('')
-    : wd.ent ? `{ ?i (wdt:P31|wdt:P279)/wdt:P279* ?c . FILTER(${classes.map((c) => '?c = wd:' + c).join(' || ')}) } UNION { ${classNamed(wd.clsLabel || '')} }`
+    : wd.ent ? `?i (wdt:P31|wdt:P279)/wdt:P279* ?c . FILTER(${classes.map((c) => '?c = wd:' + c).join(' || ')})`
     : `?i (wdt:P31|wdt:P279)/wdt:P279* ?c . FILTER(${classes.map((c) => '?c = wd:' + c).join(' || ')})`;
   const ent = wd.ent ? (wd.prop ? `?i wdt:${wd.prop} wd:${wd.ent} .` : `?i ?p wd:${wd.ent} .`) : '';
-  if (cands.length) {
-    tasks.push(sparqlCheck(`SELECT ?i ?sl WHERE { VALUES ?i { ${cands.map((c) => 'wd:' + c.id).join(' ')} } ${member} ${ent} ?i wikibase:sitelinks ?sl . } LIMIT 10`, 3500).then((rows) => {
-      const hit = cands.find((c) => rows.some((r) => qid(r.i.value) === c.id));
+  // the likeliest ten (exact names first, then the famous), so the query stays small and fast
+  const exactFirst = (c) => [c.label, c.matched].some((n) => answerKey(n || '') === tk);
+  const checkList = [...cands].sort((a, b) => exactFirst(b) - exactFirst(a) || (b.sl || 0) - (a.sl || 0)).slice(0, 10);
+  const memberRows = (pattern) => sparqlCheckStrict(`SELECT ?i ?sl WHERE { VALUES ?i { ${checkList.map((c) => 'wd:' + c.id).join(' ')} } ${pattern} ${ent} ?i wikibase:sitelinks ?sl . } LIMIT 10`, 3500);
+  if (checkList.length) {
+    tasks.push(memberRows(member).then((rows) => (rows.length || !wd.ent ? rows : memberRows(classNamed(wd.clsLabel || '')))).then((rows) => {
+      const members = checkList.filter((c) => rows.some((r) => qid(r.i.value) === c.id));
+      const exactly = (c) => [c.label, c.matched].some((n) => answerKey(n || '') === tk);
+      const hit = members.find(exactly) || members[0];
       if (!hit) throw new Error('not a member');
+      if (!exactly(hit) && famousExact.some((id) => !members.some((m) => m.id === id))) throw new Error('not a member'); // "shakespeare" ≠ Dorothy Shakespear
       const sl = +(rows.find((r) => qid(r.i.value) === hit.id).sl.value || 0);
       return { valid: true, canonical: canonicalOf(hit), names: [hit.label, hit.matched].filter(Boolean), tier: tierFor(sl, wd.cut), sl, how: 'membership' };
     }));
   }
   // 3) entity categories: look the exact name up *within* the entity's works (bounded, fast)
   if (wd.ent) {
-    tasks.push(sparqlCheck(`SELECT ?i ?sl ?l WHERE { VALUES ?l { ${labelVariants(typed).map(lit).join(' ')} } ?i rdfs:label ?l . ${ent} ${member} ?i wikibase:sitelinks ?sl . } LIMIT 5`, 3500).then((rows) => {
+    tasks.push(sparqlCheckStrict(`SELECT ?i ?sl ?l WHERE { VALUES ?l { ${labelVariants(typed).map(lit).join(' ')} } ?i rdfs:label ?l . ${ent} ${member} ?i wikibase:sitelinks ?sl . } LIMIT 5`, 3500).then((rows) => {
       if (!rows.length) throw new Error('not found');
       const sl = +(rows[0].sl?.value || 0);
       return { valid: true, canonical: tidyLabel(rows[0].l?.value || typed), tier: tierFor(sl, wd.cut), sl, how: 'entity' };
     }));
   }
-  if (!tasks.length) return { valid: false };
-  return Promise.any(tasks).catch(() => ({ valid: false }));
+  // 4) Wikipedia's own categories: "Pixar animated films", "Dog breeds originating in Germany", "Birds of Kenya"
+  const catWords = wordList(wd.clsLabel || '');
+  const entWords = wd.entLabel ? wordList(wd.entLabel) : [];
+  const WORKS = /\b(film|video game|game|song|album|band|company|brand|team|novel|book|episode|series|single|franchise|character)\b/i;
+  const CONNECT = new Set(['of', 'in', 'by', 'from', 'originating', 'described', 'introduced', 'endemic', 'native', 'discovered', 'named', 'with', 'that', 'which', 'first', 'established', 'released', 'produced', 'directed']);
+  const inCats = (c) => c.cats?.some((cat) => {
+    const w = wordList(cat);
+    if (!catWords.every((x) => w.includes(x)) || !entWords.every((x) => w.includes(x))) return false;
+    const after = w[w.lastIndexOf(catWords[catWords.length - 1]) + 1];
+    return !after || CONNECT.has(after); // the class is the head noun, not a modifier
+  });
+  const viaCats = catWords.length && catWords.length <= 3 ? cands.filter((c) => c.wiki && !vetoed(c) && inCats(c) && (!WORKS.test(c.description) || WORKS.test(wd.clsLabel || ''))) : [];
+  if (viaCats.length) {
+    const hit = viaCats.find(named) || viaCats[0];
+    tasks.push(sitelinksOf(hit.id).then((sl) => ({ valid: true, canonical: canonicalOf(hit), names: [hit.label, hit.matched].filter(Boolean), tier: tierFor(sl, wd.cut), sl: sl ?? undefined, how: 'wikipedia category' })));
+  }
+  if (!tasks.length) fail(cands.length > 0);
+  return Promise.any(tasks).catch((agg) => {
+    // sure it's not on this trail only if every check really ran (not cut short by a timeout or rate limit)
+    const errs = agg?.errors || [];
+    fail(cands.length > 0 && errs.every((e) => /not a member|not found/.test(e?.message || '')));
+  });
 }
 
 /** Raw SPARQL rows (both engines, QLever first) — for the hunt's one-off lookups. */
 const sparqlRows = (query, ms = 9000) => sparql(query, { ms });
 
-module.exports = { generate, judge, plan, corePhrase, descFits, headWords, looksLatin, chooseName, pageviews, sparqlRows };
+module.exports = { generate, judge, plan, corePhrase, descFits, headWords, looksLatin, chooseName, pageviews, sparqlRows, useJudgeStore, wikiCandidates };

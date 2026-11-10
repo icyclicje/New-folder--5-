@@ -239,6 +239,66 @@ async function main() {
   ok(!!turn5, 'play resumes with the next camper on the new trail');
   Hm.s.close(); Iw.s.close();
 
+  // ---------------------------------------------------------- game 6: who carves — take turns
+  console.log('\n🔁 Game 6 — Leader\'s Pick, campers take turns carving');
+  const Jn = client('Juniper'), Lc = client('Larch');
+  await Jn.hello(); await Lc.hello();
+  const r6 = await Jn.emit('room:create', { settings: { mode: 'classic', gimmick: 'leaderpick', specialEvery: 0, pickBy: 'rotate', lives: 3, fuseSec: 12 } });
+  await Lc.emit('room:join', { code: r6.code });
+  await Jn.emit('room:pack', { pack: rulesPack });
+  await sleep(300);
+  ok(Jn.state?.settings?.pickBy === 'rotate', 'the "take turns" carving rule is saved');
+  const pickers = [];
+  let cat6 = null;
+  const used6 = new Set();
+  // carve exact archive prompts (instant), and answer from the live trail's real answer key
+  const carve6 = ['Name a dog breed', 'Name any Pokémon', 'Name a Taylor Swift song'];
+  for (const c of [Jn, Lc]) {
+    const prev = c.onEv;
+    c.onEv = async (ev) => {
+      prev?.(ev);
+      if (ev.type === 'category') { cat6 = ev.category; used6.clear(); }
+      if (ev.type === 'accept') used6.add(ev.answer.toLowerCase());
+      if (ev.type === 'special' && ev.leaderId === c.id) { pickers.push(ev.leaderId); setTimeout(() => c.s.emit('leader:pick', { text: carve6[(pickers.length - 1) % carve6.length] }), 150); }
+      if (ev.type === 'turn' && ev.pid === c.id) {
+        const cat = cat6 || c.state?.game?.category;
+        const pool = localR(cat?.prompt).length ? localR(cat.prompt) : await answersFor(cat?.id).catch(() => []);
+        const a = pool.find((x) => !used6.has(x.toLowerCase()));
+        if (a) setTimeout(() => c.s.emit('submit', { text: a }), 120);
+      }
+    };
+  }
+  await Jn.emit('room:start', {});
+  for (let i = 0; i < 80 && pickers.length < 2; i++) await sleep(250);
+  ok(pickers.length >= 2 && pickers[0] !== pickers[1], pickers.length >= 2 ? `two special rounds, two different carvers (${pickers.slice(0, 2).map((id) => (id === Jn.id ? 'Juniper' : 'Larch')).join(' → ')})` : `carver rotation (only ${pickers.length} special round seen)`);
+  Jn.s.close(); Lc.s.close();
+
+  // ---------------------------------------------------------- game 7: ending a game
+  console.log('\n🌙 Game 7 — ending a game early / after a set number of rounds');
+  const Mp = client('Maple'), Ok = client('Oak');
+  await Mp.hello(); await Ok.hello();
+  const r7 = await Mp.emit('room:create', { settings: { mode: 'classic', lives: 3, fuseSec: 12 } });
+  await Ok.emit('room:join', { code: r7.code });
+  await Mp.emit('room:pack', { pack: rulesPack });
+  await Mp.emit('room:start', {});
+  await Mp.waitEv('turn', 15000).catch(() => null);
+  const notHost7 = await Ok.emit('room:end', {});
+  ok(notHost7 && !notHost7.ok, 'only the host can end the game');
+  const endRes = await Mp.emit('room:end', {});
+  const over7 = await Ok.waitEv('gameover', 8000).catch(() => null);
+  ok(endRes?.ok && !!over7, over7 ? `the host ended it early → results (${over7.tie ? 'shared win' : 'winner ' + (over7.winnerId === Mp.id ? 'Maple' : 'Oak')})` : 'host ends the game early');
+  Mp.s.close(); Ok.s.close();
+  const Pn = client('Pine'), Qk = client('Quaking');
+  await Pn.hello(); await Qk.hello();
+  const r7b = await Pn.emit('room:create', { settings: { mode: 'classic', lives: 3, fuseSec: 3, roundLimit: 1 } });
+  await Qk.emit('room:join', { code: r7b.code });
+  await Pn.emit('room:pack', { pack: rulesPack });
+  ok(Pn.state?.settings?.roundLimit === 1, 'game length (1 round) is saved');
+  await Pn.emit('room:start', {});
+  const over7b = await Pn.waitEv('gameover', 40000).catch(() => null);
+  ok(!!over7b && over7b.results.every((x) => x.placement >= 1), over7b ? 'after the last round the game ends on the standings' : 'round limit ends the game');
+  Pn.s.close(); Qk.s.close();
+
   // ---------------------------------------------------------- quick play
   console.log('\n🥾 Quick Trek matchmaking');
   const Q1 = client('Quaking Aspen'), Q2 = client('Quince');

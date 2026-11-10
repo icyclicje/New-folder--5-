@@ -311,9 +311,11 @@ export function mooseSVG() {
     <ellipse class="m-shadow" cx="96" cy="141" rx="48" ry="5.5" fill="#000" opacity=".34"/>
     <g class="m-legs">${L('l2', 81, 96, 137, true)}${L('l4', 128, 96, 137, true)}${L('l1', 66, 98, 140)}${L('l3', 115, 98, 140)}</g>
     <g class="m-body">
-      <path d="M139.5 69C145 66 150.5 69.5 149 76C147.6 80.5 142.5 80.5 140 77Z" fill="#4a2c17" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
+      <g class="m-tail"><path d="M139.5 69C145 66 150.5 69.5 149 76C147.6 80.5 142.5 80.5 140 77Z" fill="#4a2c17" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/><path d="M144 70.5q3 1.6 3.4 5" stroke="#7a5034" stroke-width="1.2" fill="none" stroke-linecap="round" opacity=".7"/></g>
       <path d="M56 74C56 60 64 50 76 47C82 40 94 38 103 44C126 44 143 60 143 81C143 103 126 117 101 117H84C66 117 54 104 54 89C54 83 54.5 78 56 74Z" fill="url(#${g})" stroke="${OL}" stroke-width="2.4" stroke-linejoin="round"/>
       <ellipse cx="102" cy="104.5" rx="30" ry="10.5" fill="#f0d2a6" opacity=".2"/>
+      <path d="M118 66q2.4-1.6 4.6-.6M128 80q2-1.8 4.4-1M112 92q2.6-1.2 4.8.2M124 100q2.4-.8 4.4.8M95 82q2.6-1.4 5-.2M86 98q2.4-1.2 4.6 0" stroke="#2a1608" stroke-width="1.3" fill="none" stroke-linecap="round" opacity=".28"/>
+      <g class="m-valve"><rect x="136.5" y="94" width="7" height="5" rx="1.6" fill="#e9d8b4" stroke="${OL}" stroke-width="1.5" transform="rotate(-28 140 96.5)"/><circle cx="143.2" cy="92.6" r="2.1" fill="#d6c19a" stroke="${OL}" stroke-width="1.3"/></g>
       <ellipse cx="80" cy="77" rx="17" ry="22" fill="url(#${nk})"/>
       <path d="M79 49.5q2-5.2 6-6.6M87.5 45.5q2.6-4.6 6.6-5.2M96.5 44.2q3-3.6 7-3.2M105 45.6q3.2-2.6 7-1.8" stroke="#2a1608" stroke-width="2" fill="none" stroke-linecap="round" opacity=".5"/>
       <ellipse cx="97" cy="62" rx="22" ry="9.5" fill="url(#${sheen})" transform="rotate(-14 97 62)"/>
@@ -322,8 +324,8 @@ export function mooseSVG() {
       <path class="m-stretch" d="M104 58q6-6 12 0M124 76q5-5.5 10 0M92 109q6-5 12 0" stroke="#fff" stroke-opacity="0" stroke-width="2" fill="none" stroke-linecap="round"/>
     </g>
     <g class="m-head">
-      <path d="M80 46C86 39 94 35 102.5 35C99.5 42.5 92.5 48 83.5 50.5Z" fill="url(#${ear})" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
-      <path d="M84 46.2C88.2 42 93.2 39.3 98.4 38.7C95.4 42.8 90.6 45.8 85.6 47.6Z" fill="#c99872"/>
+      <g class="m-ear m-ear-far"><path d="M80 46C86 39 94 35 102.5 35C99.5 42.5 92.5 48 83.5 50.5Z" fill="url(#${ear})" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M84 46.2C88.2 42 93.2 39.3 98.4 38.7C95.4 42.8 90.6 45.8 85.6 47.6Z" fill="#c99872"/></g>
       ${antler(76, 42, false, 0.94, antFar, '#5f4629', 6)}
       <path d="M59.5 82C56.5 90 55.5 98 57.6 104C59.4 109.4 66.8 109.6 68.4 104.2C70 98 70.6 90 72 82Z" fill="url(#${ear})" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
       <path d="M60.2 88.5C59.2 94.5 59.4 99.5 61 103.6" stroke="#9a6a44" stroke-width="1.6" fill="none" stroke-linecap="round" opacity=".7"/>
@@ -337,12 +339,14 @@ export function mooseSVG() {
       <ellipse cx="23.2" cy="80" rx="2.6" ry="4.2" fill="#24110a" transform="rotate(16 23.2 80)"/>
       <ellipse cx="32" cy="83.4" rx="2" ry="3.3" fill="#24110a" transform="rotate(6 32 83.4)"/>
       <path class="m-mouth" d="M27.5 90.6C33.5 93 40.5 92.6 47 89.2" stroke="#3a2010" stroke-width="1.9" fill="none" stroke-linecap="round"/>
+      <path class="m-mouth-hot" d="M28 91.2q2.6-2.4 5.2 0t5.2 0t5.2 0t4.4-.4" stroke="#3a2010" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
       <path d="M85.5 62C83.5 70 79.5 75 74.5 79" stroke="${RIM}" stroke-width="2" fill="none" stroke-linecap="round" opacity=".3"/>
       <g class="m-eyes">${eye(59.5, 54, 5.6, eg)}${eye(75, 50.5, 4.5, eg)}</g>
-      <path d="M52.2 46.2q6.2-4.6 12.6-1.6M70.2 43.2q4.8-3.4 9.8-1" stroke="#2e1708" stroke-width="1.9" fill="none" stroke-linecap="round"/>
-      <ellipse cx="67" cy="66.5" rx="5.2" ry="3.2" fill="url(#${bl})"/><ellipse cx="82" cy="60" rx="3.4" ry="2.3" fill="url(#${bl})"/>
-      <path d="M60.5 47C55 40.5 48 35.5 38.5 33.6C41.5 41.8 48 47.6 56.6 51Z" fill="url(#${ear})" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
-      <path d="M57.4 47.6C53.6 43 48.8 39.6 43.6 38C46 42.6 50 46 54.6 48.6Z" fill="#d4a47c"/>
+      <path class="m-brow" d="M52.2 46.2q6.2-4.6 12.6-1.6M70.2 43.2q4.8-3.4 9.8-1" stroke="#2e1708" stroke-width="1.9" fill="none" stroke-linecap="round"/>
+      <path class="m-brow-hot" d="M52.6 44.6q6-1.2 11.4-4.6M70.6 39.8q4.8 1.6 9.4 3.8" stroke="#2e1708" stroke-width="2.1" fill="none" stroke-linecap="round"/>
+      <g class="m-blush"><ellipse cx="67" cy="66.5" rx="5.2" ry="3.2" fill="url(#${bl})"/><ellipse cx="82" cy="60" rx="3.4" ry="2.3" fill="url(#${bl})"/></g>
+      <g class="m-ear m-ear-near"><path d="M60.5 47C55 40.5 48 35.5 38.5 33.6C41.5 41.8 48 47.6 56.6 51Z" fill="url(#${ear})" stroke="${OL}" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M57.4 47.6C53.6 43 48.8 39.6 43.6 38C46 42.6 50 46 54.6 48.6Z" fill="#d4a47c"/></g>
       ${antler(62.5, 42.5, true, 1, ant, '#6e5434', 6)}
       <g class="m-sweat"><path d="M92 33q4.6 6.6 0 9.6q-4.6-3 0-9.6" fill="#a6dcff" stroke="#3a6b8a" stroke-width="1"/><circle cx="90.8" cy="38.6" r="1" fill="#fff"/></g>
     </g>
